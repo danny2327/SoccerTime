@@ -332,6 +332,14 @@ button, input {
 .settings-item:last-child { border-bottom: none; }
 .settings-item-danger { color: #ff8a75; }
 
+.settings-version {
+  color: #8a9382;
+  font-size: 12px;
+  text-align: center;
+  pointer-events: none;
+}
+.settings-version:active { background: none; }
+
 .kickoff-bar {
   display: block;
   width: 100%;

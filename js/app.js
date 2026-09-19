@@ -31,7 +31,13 @@ const App = {
   registerSW() {
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./service-worker.js').catch(() => {});
+        // Browsers apply a special caching rule to the service worker script itself - once
+        // fetched, they can go up to 24h without re-checking it at all, no matter what
+        // Cache-Control the server sends on a *later* request. That decision is locked in by
+        // the URL, so the only reliable way to force a same-day re-fetch is to make the URL
+        // itself different: appending the app version turns an update into a brand new
+        // registration instead of a "check if this exact URL changed" that a browser can skip.
+        navigator.serviceWorker.register(`./service-worker.js?v=${APP_VERSION}`).catch(() => {});
       });
     }
   },
@@ -482,6 +488,8 @@ const Screens = {
         <a href="#/team/${team.id}" class="settings-item settings-item-danger" id="end-game-btn">&times; End Game</a>
         <button id="fc-edit-btn" class="settings-item" type="button">${session.fieldCount} on field &#9998;</button>
         <button id="add-late-btn" class="settings-item" type="button">+ Add Player</button>
+        ${session.live ? '<button id="adjust-clock-btn" class="settings-item" type="button">&#8986; Adjust Clock</button>' : ''}
+        <div class="settings-item settings-version">${escapeHtml(APP_VERSION)}</div>
       </div>
       <div id="kickoff-container"></div>
       <div id="sub-queue-container"></div>
@@ -498,6 +506,7 @@ const Screens = {
       </main>
       <div id="late-modal" class="modal" hidden></div>
       <div id="goal-modal" class="modal" hidden></div>
+      <div id="clock-modal" class="modal" hidden></div>
       <div id="info-panel" class="modal" hidden>
         <div class="modal-card">
           <div class="panel-header">
@@ -1069,6 +1078,78 @@ const Screens = {
       reloadGameScreen();
     });
 
+
+    const adjustClockBtn = App.root.querySelector('#adjust-clock-btn');
+    if (adjustClockBtn) {
+      const clockModal = App.root.querySelector('#clock-modal');
+
+      function closeClockModal() {
+        clockModal.hidden = true;
+        clockModal.innerHTML = '';
+      }
+      clockModal.addEventListener('click', (e) => { if (e.target === clockModal) closeClockModal(); });
+
+      // Actually mutates the session and reports back if the request got clamped (e.g. asking
+      // to remove more time than has actually elapsed) - otherwise a coach who asked for -30s
+      // but only 5s had passed would just see a barely-there change and reasonably assume
+      // nothing happened at all. Deliberately doesn't go through reloadGameScreen() - a coach
+      // correcting by more than 30s taps this repeatedly, and a full screen rebuild would also
+      // tear down (and re-hide) the still-open Adjust Clock modal on every tap.
+      function applyClockAdjustment(deltaMinutes, now) {
+        const applied = adjustClock(session, deltaMinutes, now);
+        DB.saveSession(session);
+        const halfClockEl = App.root.querySelector('#half-clock');
+        if (halfClockEl) halfClockEl.textContent = halfClockLabel(Date.now());
+        rerender();
+        if (Math.abs(applied - deltaMinutes) > 0.01) {
+          showToast(`Could only adjust by ${formatDuration(Math.abs(applied) * 60)} - that's all the time that had elapsed on the clock.`);
+        }
+      }
+
+      // Restart Half discards real elapsed playing time, so - unlike the small +/-30s nudges -
+      // it goes through a confirmation step first. `computeDeltaMinutes` is a function of `now`
+      // (not a fixed number) so a coach who takes a moment to confirm doesn't get a reset sized
+      // off a slightly stale elapsed time.
+      function confirmClockAdjustment(computeDeltaMinutes, message, confirmLabel) {
+        closeClockModal();
+        showConfirm(message, confirmLabel).then((confirmed) => {
+          if (!confirmed) return;
+          const now = Date.now();
+          applyClockAdjustment(computeDeltaMinutes(now), now);
+        });
+      }
+
+      adjustClockBtn.addEventListener('click', () => {
+        clockModal.hidden = false;
+        clockModal.innerHTML = `
+          <div class="modal-card">
+            <h2>Adjust Clock</h2>
+            <div class="goal-team-picker">
+              <button class="secondary-btn big" id="clock-restart" type="button">Restart Half</button>
+              <button class="secondary-btn big" id="clock-minus30" type="button">&minus;30 seconds</button>
+              <button class="secondary-btn big" id="clock-plus30" type="button">+30 seconds</button>
+              <button class="secondary-btn" id="clock-cancel" type="button">Cancel</button>
+            </div>
+          </div>
+        `;
+        clockModal.querySelector('#clock-cancel').addEventListener('click', closeClockModal);
+        clockModal.querySelector('#clock-restart').addEventListener('click', () => {
+          confirmClockAdjustment(
+            (now) => (session.halfStartedAt ? -(now - session.halfStartedAt) / (60 * 1000) : 0),
+            'Restart the clock for this half? Elapsed time this half will reset to 0:00.',
+            'Restart Half'
+          );
+        });
+        // Left open (not closed on tap) - a coach correcting by more than 30 seconds needs to
+        // hit this repeatedly. Backdrop tap or Cancel is the way out.
+        clockModal.querySelector('#clock-minus30').addEventListener('click', () => {
+          applyClockAdjustment(-0.5, Date.now());
+        });
+        clockModal.querySelector('#clock-plus30').addEventListener('click', () => {
+          applyClockAdjustment(0.5, Date.now());
+        });
+      });
+    }
 
     App.root.querySelector('#add-late-btn').addEventListener('click', () => {
       const availableIds = team.players.map((p) => p.id).filter((id) => !session.players[id]);

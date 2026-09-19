@@ -101,6 +101,30 @@ function kickoff(session) {
   });
 }
 
+// Corrects a mistimed kickoff (e.g. the coach hit Kick Off a few minutes early) by shifting
+// every live timing reference by deltaMinutes: positive adds elapsed time (as if kickoff had
+// been earlier), negative removes it (as if kickoff had been later). Already-banked seconds
+// from before the current live stretch (past halves, past sub stints) are untouched - only the
+// clock reference for whatever's accruing right now moves. Each shifted timestamp is clamped to
+// `now` so a too-large correction can't push a reference into the future and produce a negative
+// elapsed time - you can't remove more time than has actually elapsed. No-op before kickoff,
+// since there's no running clock yet to correct. Returns the minutes actually applied to the
+// half clock (per-player clamping can differ slightly, e.g. someone subbed on more recently
+// than the half started), so the caller can tell the coach when a request got clamped.
+function adjustClock(session, deltaMinutes, now) {
+  if (!session.live || !session.halfStartedAt || !deltaMinutes) return 0;
+  const deltaMs = deltaMinutes * 60 * 1000;
+  const newHalfStartedAt = Math.min(now, session.halfStartedAt - deltaMs);
+  const appliedMinutes = (session.halfStartedAt - newHalfStartedAt) / (60 * 1000);
+  session.halfStartedAt = newHalfStartedAt;
+  Object.values(session.players).forEach((p) => {
+    p.lastChange = Math.min(now, p.lastChange - deltaMs);
+    if (p.isGoalie) p.lastGoalieChange = Math.min(now, p.lastGoalieChange - deltaMs);
+    if (p.currentRowIndex != null) p.lastRowChange = Math.min(now, p.lastRowChange - deltaMs);
+  });
+  return appliedMinutes;
+}
+
 // Called when the half's length has elapsed: freezes every player's accumulated time as of
 // `now` (same accrual logic as setStatus/setGoalie, just applied to everyone unconditionally),
 // stops the clock, and advances to the next half. Positions/status/goalie are left untouched -
