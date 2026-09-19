@@ -10,6 +10,11 @@
 // minutes before kickoff. Nothing accrues until kickoff() flips session.live to true and
 // resets everyone's clock reference to that exact moment.
 
+// This app only ever plays a standard 2-half game - once the 2nd half's clock runs out, there's
+// nothing left to kick off, so the game screen ends the game itself instead of offering a
+// nonexistent "Start Half 3".
+const TOTAL_HALVES = 2;
+
 function getElapsedField(p, now, live) {
   return p.fieldSeconds + (live && p.status === 'field' ? (now - p.lastChange) / 1000 : 0);
 }
@@ -168,6 +173,7 @@ function startSession(team, presentIds, fieldCount, halfLengthMinutes, opponentN
     teamId: team.id, fieldCount, halfLengthMinutes, startedAt: now, players, rows,
     live: false, kickoffAt: null, half: 1, halfStartedAt: null,
     opponentName: (opponentName || '').trim(), score: { us: 0, opponent: 0 }, goals: [],
+    subQueue: [],
   };
   DB.saveSession(session);
   return session;
@@ -195,6 +201,16 @@ function removeGoal(session, goalId) {
   session.score[goal.team] = Math.max(0, session.score[goal.team] - 1);
 }
 
+// Fills in (or changes) who scored/assisted an already-logged 'us' goal - e.g. the coach didn't
+// see who scored in the moment and comes back to it later. Doesn't touch the score, since the
+// goal itself was already counted when it was first recorded.
+function editGoal(session, goalId, { scorerId, assistIds }) {
+  const goal = (session.goals || []).find((g) => g.id === goalId);
+  if (!goal || goal.team !== 'us') return;
+  goal.scorerId = scorerId || null;
+  goal.assistIds = (assistIds || []).slice(0, 2);
+}
+
 // Shapes the finished-game summary appended to the team's season history when the coach ends
 // the game (see DB.appendGame) - the session itself is discarded right after.
 function buildGameRecord(session) {
@@ -208,4 +224,72 @@ function buildGameRecord(session) {
     fieldCount: session.fieldCount,
     halfLengthMinutes: session.halfLengthMinutes,
   };
+}
+
+// Queues a substitution (bench player onId coming on for field player offId) instead of making
+// it immediately - lets the coach prepare several subs ahead of a stoppage and fire them all at
+// once with applySubQueue. Refuses to double-book either player into a second pending pair.
+function queueSub(session, offId, onId) {
+  if (!session.subQueue) session.subQueue = [];
+  const alreadyQueued = session.subQueue.some((p) => (
+    p.offId === offId || p.onId === offId || p.offId === onId || p.onId === onId
+  ));
+  if (alreadyQueued) return null;
+  const pair = { id: uid(), offId, onId };
+  session.subQueue.push(pair);
+  return pair;
+}
+
+function unqueueSub(session, pairId) {
+  session.subQueue = (session.subQueue || []).filter((p) => p.id !== pairId);
+}
+
+// Executes every queued pair at once (same steps the 1-for-1 drag substitution already performs
+// in app.js), then clears the queue. Re-checks each pair's players are still in the statuses they
+// were in when queued - a drag elsewhere could have moved either of them in the meantime - and
+// silently skips any pair that's no longer valid rather than leaving the field in a broken state.
+function applySubQueue(session, now) {
+  (session.subQueue || []).forEach(({ offId, onId }) => {
+    const offP = session.players[offId];
+    const onP = session.players[onId];
+    if (!offP || !onP) return;
+    if (offP.status !== 'field' || onP.status !== 'bench') return;
+    const targetRowIdx = FieldLayout.rowIndexOf(session.rows, offId);
+    setStatus(session, offId, 'bench', now);
+    FieldLayout.replaceInRows(session.rows, offId, onId);
+    setStatus(session, onId, 'field', now);
+    setRow(session, onId, targetRowIdx, now);
+  });
+  session.subQueue = [];
+}
+
+// Drops a player out of the game entirely - for someone selected by mistake at kickoff (e.g.
+// wasn't actually there) who should never have counted at all. Unlike setUnavailable, nothing
+// about them is preserved: whatever field/bench/goalie time they'd accrued is discarded and they
+// vanish from every panel, same as if they'd never been added. Any goal they're credited with
+// keeps their id - the roster lookup already renders "(removed)" for ids no longer present.
+function removePlayerFromGame(session, playerId) {
+  const p = session.players[playerId];
+  if (!p) return;
+  if (p.status === 'field') FieldLayout.removeFromRows(session.rows, playerId);
+  session.subQueue = (session.subQueue || []).filter((pair) => pair.offId !== playerId && pair.onId !== playerId);
+  delete session.players[playerId];
+}
+
+// Marks a player unavailable for the rest of the game (hurt, sent home) or brings them back.
+// Unlike removePlayerFromGame, their accumulated time is kept exactly as-is - they just stop
+// taking part in the field/bench rotation (and can't be queued for a sub) until, if ever, marked
+// available again. Taking someone off the field this way benches them first, same as any normal
+// substitution, so their field time is banked rather than lost.
+function setUnavailable(session, playerId, unavailable, now) {
+  const p = session.players[playerId];
+  if (!p || !!p.unavailable === !!unavailable) return;
+  if (unavailable) {
+    if (p.status === 'field') {
+      setStatus(session, playerId, 'bench', now);
+      FieldLayout.removeFromRows(session.rows, playerId);
+    }
+    session.subQueue = (session.subQueue || []).filter((pair) => pair.offId !== playerId && pair.onId !== playerId);
+  }
+  p.unavailable = unavailable;
 }

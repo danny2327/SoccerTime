@@ -422,6 +422,16 @@ const Screens = {
     if (!session.score) session.score = { us: 0, opponent: 0 };
     if (!session.goals) session.goals = [];
     if (session.opponentName == null) session.opponentName = '';
+    if (!session.subQueue) session.subQueue = [];
+
+    // A session already sitting past the last half (e.g. saved before this cap existed) has no
+    // game screen to show - there's no half beyond TOTAL_HALVES to kick off, so finish it now.
+    if (!session.live && (session.half || 1) > TOTAL_HALVES) {
+      DB.appendGame(team.id, buildGameRecord(session));
+      DB.saveSession(null);
+      location.hash = `#/team/${team.id}`;
+      return;
+    }
 
     const half = session.half || 1;
 
@@ -450,6 +460,14 @@ const Screens = {
       Screens.gameSession();
     }
 
+    // Shared by the manual "End Game" action and the automatic full-time finish below - files
+    // the session away into the team's season history and drops the coach back on the team page.
+    function finishGame() {
+      DB.appendGame(team.id, buildGameRecord(session));
+      DB.saveSession(null);
+      location.hash = `#/team/${team.id}`;
+    }
+
     App.root.innerHTML = `
       <header class="topbar game-header">
         <button id="goal-btn" class="icon-btn goal-btn" type="button" ${session.live ? '' : 'disabled'}>&#9917; Goal</button>
@@ -466,6 +484,7 @@ const Screens = {
         <button id="add-late-btn" class="settings-item" type="button">+ Add Player</button>
       </div>
       <div id="kickoff-container"></div>
+      <div id="sub-queue-container"></div>
       <main class="game-main">
         <div class="bench-strip" id="bench-strip"></div>
         <div class="field-wrap" id="field-wrap">
@@ -473,7 +492,9 @@ const Screens = {
           <div class="goal-zone-highlight" id="goal-zone-highlight" style="left:${FieldLayout.GOAL_ZONE.xMin}%; width:${FieldLayout.GOAL_ZONE.xMax - FieldLayout.GOAL_ZONE.xMin}%; top:${FieldLayout.GOAL_ZONE.yMin}%; height:${100 - FieldLayout.GOAL_ZONE.yMin}%;"></div>
           <div class="tokens-layer" id="tokens-layer"></div>
         </div>
-        <p class="field-hint">Drag a player onto the goal to make them goalie, or onto another player to swap/replace them. Drag off the field to bench them.</p>
+        <div id="undo-banner" class="undo-banner" hidden></div>
+        <div id="field-warning" class="field-warning" hidden></div>
+        <p class="field-hint">Drag a player onto the goal to make them goalie, or onto another player to swap/replace them. Drag off the field to bench them. Tap a bench player then a field player to queue a substitution for later.</p>
       </main>
       <div id="late-modal" class="modal" hidden></div>
       <div id="goal-modal" class="modal" hidden></div>
@@ -501,6 +522,7 @@ const Screens = {
     const fieldWrap = App.root.querySelector('#field-wrap');
     const goalZoneEl = App.root.querySelector('#goal-zone-highlight');
     const kickoffContainer = App.root.querySelector('#kickoff-container');
+    const subQueueContainer = App.root.querySelector('#sub-queue-container');
     const scoreboard = App.root.querySelector('#scoreboard');
 
     function renderScoreboard() {
@@ -532,6 +554,57 @@ const Screens = {
       }
     }
 
+    // Re-rendered alongside the kickoff bar for the same reason - who's queued (and against
+    // whom) can change on every tap, not just full-screen reloads.
+    function renderSubQueue() {
+      const queue = session.subQueue || [];
+      if (queue.length === 0) { subQueueContainer.innerHTML = ''; return; }
+      subQueueContainer.innerHTML = `
+        <div class="sub-queue-bar">
+          <div class="sub-queue-chips">
+            ${queue.map((pair) => {
+              const off = rosterById[pair.offId];
+              const on = rosterById[pair.onId];
+              const label = (rp) => rp ? `#${escapeHtml(rp.number || '?')} ${escapeHtml(rp.name)}` : '(removed)';
+              return `
+                <span class="sub-queue-chip">
+                  ${label(on)} &rarr; for ${label(off)}
+                  <button class="sub-queue-remove" data-unqueue="${pair.id}" type="button" aria-label="Remove">&times;</button>
+                </span>`;
+            }).join('')}
+          </div>
+          <button id="make-subs-btn" class="kickoff-bar sub-queue-execute" type="button">&#8646; Make ${queue.length} Sub${queue.length > 1 ? 's' : ''}</button>
+        </div>
+      `;
+      subQueueContainer.querySelectorAll('[data-unqueue]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          unqueueSub(session, btn.getAttribute('data-unqueue'));
+          DB.saveSession(session);
+          renderSubQueue();
+          rerender();
+        });
+      });
+      subQueueContainer.querySelector('#make-subs-btn').addEventListener('click', () => {
+        applySubQueue(session, Date.now());
+        DB.saveSession(session);
+        reloadGameScreen();
+      });
+    }
+
+    // Placed right after the field (not above it) specifically so it never shifts the position
+    // of anything a coach might be mid-tap on - the header, sub-queue bar, bench strip, and the
+    // field itself all stay put whether or not this is showing.
+    function renderFieldWarning() {
+      const el = App.root.querySelector('#field-warning');
+      const short = session.fieldCount - totalOnField();
+      if (short > 0) {
+        el.textContent = `Short-handed: only ${totalOnField()} of ${session.fieldCount} on the field`;
+        el.hidden = false;
+      } else {
+        el.hidden = true;
+      }
+    }
+
     function timeLabelFor(p, now) {
       const base = formatDuration(p.status === 'field' ? getElapsedField(p, now, session.live) : getElapsedBench(p, now, session.live));
       if (p.isGoalie) return `${base} · GK ${formatDuration(getElapsedGoalie(p, now, session.live))}`;
@@ -547,10 +620,35 @@ const Screens = {
       return `Field ${formatDuration(Math.max(0, field - goalie))}`;
     }
 
-    function createTokenEl(pid, p, isField) {
+    // Which on-field players are "due" for a sub next: the N with the most outfield time
+    // (goalie time excluded, same as outfieldTimeLabelFor), where N is however many available
+    // (non-unavailable) players are waiting on the bench - that's how many could actually come
+    // on right now. No bench, no candidates.
+    function computeSubCandidates(now) {
+      const benchAvailableCount = Object.values(session.players)
+        .filter((p) => p.status === 'bench' && !p.unavailable).length;
+      if (benchAvailableCount === 0) return new Set();
+      const ranked = Object.entries(session.players)
+        .filter(([, p]) => p.status === 'field')
+        .map(([id, p]) => ({
+          id,
+          time: getElapsedField(p, now, session.live) - getElapsedGoalie(p, now, session.live),
+        }))
+        .sort((a, b) => b.time - a.time)
+        .slice(0, benchAvailableCount)
+        .map((x) => x.id);
+      return new Set(ranked);
+    }
+
+    function createTokenEl(pid, p, isField, needsSub) {
       const rp = rosterById[pid];
       const el = document.createElement('div');
-      el.className = 'token ' + (isField ? 'token-field' : 'token-bench');
+      const isQueued = (session.subQueue || []).some((pair) => pair.offId === pid || pair.onId === pid);
+      const classes = ['token', isField ? 'token-field' : 'token-bench'];
+      if (pid === pendingSelectId) classes.push('token-pending-select');
+      if (isQueued) classes.push('token-queued');
+      if (isField && needsSub) classes.push('token-needs-sub');
+      el.className = classes.join(' ');
       el.dataset.playerId = pid;
       const number = rp ? rp.number : '';
       const name = rp ? rp.name : '(removed)';
@@ -559,6 +657,8 @@ const Screens = {
         <div class="token-circle-wrap">
           <div class="token-circle ${number ? '' : 'no-number'} ${p.isGoalie ? 'is-goalie' : ''}">${escapeHtml(number || '?')}</div>
           ${p.isGoalie ? '<span class="goalie-badge">GK</span>' : ''}
+          ${isQueued ? '<span class="sub-badge">&#8646;</span>' : ''}
+          ${isField ? '<span class="sub-next-badge" title="Highest field time on the field - due for a sub">&#9203;</span>' : ''}
         </div>
         <div class="token-name">${escapeHtml(name)}</div>
         ${isField ? '' : '<div class="token-field-total"></div>'}
@@ -570,11 +670,12 @@ const Screens = {
       const now = Date.now();
       tokensLayer.innerHTML = '';
       const positions = FieldLayout.computePositions(session.rows);
+      const needsSubIds = computeSubCandidates(now);
 
       Object.entries(session.players).forEach(([pid, p]) => {
         if (p.status !== 'field') return;
         const pos = p.isGoalie ? FieldLayout.GOALIE_SPOT : (positions[pid] || { xPct: 50, yPct: 50 });
-        const el = createTokenEl(pid, p, true);
+        const el = createTokenEl(pid, p, true, needsSubIds.has(pid));
         el.style.left = pos.xPct + '%';
         el.style.top = pos.yPct + '%';
         el.querySelector('.token-time').textContent = timeLabelFor(p, now);
@@ -582,7 +683,7 @@ const Screens = {
       });
 
       const benchIds = Object.entries(session.players)
-        .filter(([, p]) => p.status === 'bench')
+        .filter(([, p]) => p.status === 'bench' && !p.unavailable)
         .sort((a, b) => getElapsedBench(b[1], now, session.live) - getElapsedBench(a[1], now, session.live))
         .map(([id]) => id);
 
@@ -600,6 +701,8 @@ const Screens = {
       }
 
       renderKickoffBar();
+      renderSubQueue();
+      renderFieldWarning();
       attachDragHandlers();
     }
 
@@ -610,17 +713,23 @@ const Screens = {
         const halfEndsAt = session.halfStartedAt + session.halfLengthMinutes * 60 * 1000;
         if (now >= halfEndsAt) {
           // Half's time is up: freeze everyone's clock exactly at the boundary, leave the
-          // lineup untouched, and reload the screen (brings back the Kick Off bar, now
-          // labelled for the next half).
+          // lineup untouched. If that was the last half, there's nothing left to kick off, so
+          // the game ends itself here rather than reloading into a "Start Half 3" that doesn't
+          // exist; otherwise reload the screen (brings back the Kick Off bar for the next half).
           endHalf(session, halfEndsAt);
-          DB.saveSession(session);
-          reloadGameScreen();
+          if (session.half > TOTAL_HALVES) {
+            finishGame();
+          } else {
+            DB.saveSession(session);
+            reloadGameScreen();
+          }
           return;
         }
         const halfClockEl = App.root.querySelector('#half-clock');
         if (halfClockEl) halfClockEl.textContent = halfClockLabel(now);
       }
 
+      const needsSubIds = computeSubCandidates(now);
       App.root.querySelectorAll('.token').forEach((el) => {
         const pid = el.dataset.playerId;
         const p = session.players[pid];
@@ -629,6 +738,7 @@ const Screens = {
         if (timeEl) timeEl.textContent = timeLabelFor(p, now);
         const totalEl = el.querySelector('.token-field-total');
         if (totalEl) totalEl.textContent = outfieldTimeLabelFor(p, now);
+        if (p.status === 'field') el.classList.toggle('token-needs-sub', needsSubIds.has(pid));
       });
     }
 
@@ -639,6 +749,48 @@ const Screens = {
     // the goal - makes them goalie.
     const DRAG_THRESHOLD = 8;
     let dragState = null;
+    // The token tapped first while building a queued substitution, awaiting its pair.
+    let pendingSelectId = null;
+    // A snapshot of players/rows from just before the last manual drag that actually changed
+    // something, offered back via the undo banner - deliberately not touched by tap-to-queue
+    // (handleTokenTap) or applySubQueue, since only manual drags should be undoable this way.
+    let lastMove = null;
+    let undoBannerTimer = null;
+
+    function undoLastMove() {
+      if (!lastMove) return;
+      session.players = lastMove.players;
+      session.rows = lastMove.rows;
+      lastMove = null;
+      DB.saveSession(session);
+      hideUndoBanner();
+      rerender();
+    }
+
+    // An inline banner (not a fixed-position overlay) right below the field, next to the
+    // short-handed warning - a floating "toast" turned out to render off-screen or behind the
+    // browser's own chrome on at least one mobile browser, so this rides in the normal page flow
+    // instead, which has no such viewport quirks to worry about.
+    function showUndoBanner(label, onUndo) {
+      const el = App.root.querySelector('#undo-banner');
+      if (!el) return;
+      if (undoBannerTimer) clearTimeout(undoBannerTimer);
+      el.innerHTML = `<span></span><button type="button" class="undo-banner-btn">Undo</button>`;
+      el.querySelector('span').textContent = label;
+      el.hidden = false;
+      el.querySelector('.undo-banner-btn').addEventListener('click', () => {
+        clearTimeout(undoBannerTimer);
+        onUndo();
+      });
+      undoBannerTimer = setTimeout(hideUndoBanner, 30000);
+    }
+
+    function hideUndoBanner() {
+      const el = App.root.querySelector('#undo-banner');
+      if (!el) return;
+      el.hidden = true;
+      el.innerHTML = '';
+    }
 
     function attachDragHandlers() {
       App.root.querySelectorAll('.token').forEach((el) => {
@@ -665,6 +817,8 @@ const Screens = {
     }
 
     function beginActualDrag(e) {
+      // A real drag always wins over a half-made tap-to-pair attempt.
+      pendingSelectId = null;
       const { sourceEl } = dragState;
       const rect = sourceEl.getBoundingClientRect();
       const ghost = sourceEl.cloneNode(true);
@@ -722,12 +876,12 @@ const Screens = {
     }
 
     // Dropping a player onto the goal makes them goalie (bumping the previous one, with
-    // confirmation). Cancelling just places the dragged player normally instead of aborting
-    // the whole drag. If the incoming goalie came from the bench, the old goalie goes to the
+    // confirmation). Cancelling snaps the dragged player back to exactly where they started
+    // (see below). If the incoming goalie came from the bench, the old goalie goes to the
     // bench too (a straight substitution, count stays balanced); if they came from elsewhere on
     // the field, the old goalie just moves to a normal outfield spot (a role swap, nobody
     // actually leaves the field).
-    async function placeAsGoalie(pid, xPct, yPct, now) {
+    async function placeAsGoalie(pid, now) {
       const incomingFromBench = session.players[pid].status === 'bench';
       const currentGoalieId = Object.keys(session.players).find((id) => session.players[id].isGoalie);
 
@@ -736,11 +890,10 @@ const Screens = {
         const draggedName = (rosterById[pid] || {}).name || 'this player';
         const confirmed = await showConfirm(`Make ${draggedName} the goalie instead of ${goalieName}?`, 'Make Goalie');
         if (!confirmed) {
-          // Land them just outside the goal zone instead of on top of the goalie's fixed spot.
-          const safeY = Math.min(yPct, FieldLayout.GOAL_ZONE.yMin - 5);
-          setStatus(session, pid, 'field', now);
-          const rowIdx = FieldLayout.placeAtDrop(session.rows, pid, xPct, safeY);
-          setRow(session, pid, rowIdx, now);
+          // Nothing about the dragged player has been touched yet at this point (status/row
+          // are still exactly what they were before the drag started), so doing nothing here
+          // snaps them right back to wherever they came from on the next rerender - the bench
+          // strip, or their original spot on the field.
           return;
         }
         if (incomingFromBench) {
@@ -773,12 +926,23 @@ const Screens = {
       // while a goalie-replacement confirmation is up.
       endDrag();
 
+      let undoOffer = null;
+      const nameOf = (id) => (rosterById[id] || {}).name || 'that player';
+
       if (p && moved) {
+        // Taken before any mutation, and only turned into an offered undo if something in it
+        // actually ends up different below - a drag that gets rejected (field full) or cancelled
+        // (declined goalie swap) leaves this unused.
+        const beforeState = JSON.stringify({ players: session.players, rows: session.rows });
+        let actionLabel = null;
+
         if (!inField) {
           setStatus(session, pid, 'bench', now);
           FieldLayout.removeFromRows(session.rows, pid);
+          actionLabel = `Benched ${nameOf(pid)}`;
         } else if (FieldLayout.isInGoalZone(clampedX, clampedY)) {
-          await placeAsGoalie(pid, clampedX, clampedY, now);
+          await placeAsGoalie(pid, now);
+          actionLabel = `Made ${nameOf(pid)} goalie`;
         } else {
           if (p.isGoalie) setGoalie(session, pid, false, now);
 
@@ -789,6 +953,7 @@ const Screens = {
               FieldLayout.swapPlayers(session.rows, pid, targetPid);
               setRow(session, pid, FieldLayout.rowIndexOf(session.rows, pid), now);
               setRow(session, targetPid, FieldLayout.rowIndexOf(session.rows, targetPid), now);
+              actionLabel = `Swapped ${nameOf(pid)} and ${nameOf(targetPid)}`;
             } else {
               // Coming from the bench onto an existing field player: a 1-for-1 substitution -
               // the target comes off, the dragged player takes their exact spot.
@@ -797,6 +962,7 @@ const Screens = {
               FieldLayout.replaceInRows(session.rows, targetPid, pid);
               setStatus(session, pid, 'field', now);
               setRow(session, pid, targetRowIdx, now);
+              actionLabel = `${nameOf(pid)} in for ${nameOf(targetPid)}`;
             }
           } else if (p.status === 'bench' && outfieldCount() >= session.fieldCount - 1) {
             // Not dropped onto anyone in particular, and outfield is already at capacity for
@@ -806,12 +972,70 @@ const Screens = {
             setStatus(session, pid, 'field', now);
             const rowIdx = FieldLayout.placeAtDrop(session.rows, pid, clampedX, clampedY);
             setRow(session, pid, rowIdx, now);
+            actionLabel = `Added ${nameOf(pid)} to the field`;
           }
         }
+
+        if (actionLabel && JSON.stringify({ players: session.players, rows: session.rows }) !== beforeState) {
+          undoOffer = { label: actionLabel, snapshot: JSON.parse(beforeState) };
+        }
+
         DB.saveSession(session);
+      } else if (p && !moved) {
+        handleTokenTap(pid, p);
       }
 
+      // The actual lineup change is already saved and about to be rendered above this line -
+      // everything below is just the (non-essential) undo affordance, kept last and defensive
+      // so nothing about it can ever delay or block the real state update reaching the screen.
       rerender();
+
+      if (undoOffer) {
+        try {
+          lastMove = undoOffer.snapshot;
+          showUndoBanner(undoOffer.label, undoLastMove);
+        } catch (err) {
+          lastMove = null;
+        }
+      }
+    }
+
+    // A plain tap (no drag) builds the substitution queue: tap a bench player then a field
+    // player (either order) to pair them; tap either token again to un-pair. Goalie changes stay
+    // on the drag-to-goal-zone flow, so goalie taps are ignored here.
+    function handleTokenTap(pid, p) {
+      const existingPair = (session.subQueue || []).find((pair) => pair.offId === pid || pair.onId === pid);
+      if (existingPair) {
+        unqueueSub(session, existingPair.id);
+        if (pendingSelectId === pid) pendingSelectId = null;
+        DB.saveSession(session);
+        return;
+      }
+
+      if (p.isGoalie) return;
+
+      if (pendingSelectId === pid) {
+        pendingSelectId = null;
+        return;
+      }
+
+      if (pendingSelectId == null) {
+        pendingSelectId = pid;
+        return;
+      }
+
+      const otherId = pendingSelectId;
+      const otherP = session.players[otherId];
+      pendingSelectId = null;
+      if (!otherP) return;
+      if (otherP.status === p.status) {
+        showToast('Pick one bench player and one field player');
+        return;
+      }
+      const offId = p.status === 'field' ? pid : otherId;
+      const onId = p.status === 'field' ? otherId : pid;
+      queueSub(session, offId, onId);
+      DB.saveSession(session);
     }
 
     // --- Header actions ---
@@ -830,9 +1054,7 @@ const Screens = {
     App.root.querySelector('#end-game-btn').addEventListener('click', (e) => {
       e.preventDefault();
       if (!confirm('End this game? The current session will be cleared.')) return;
-      DB.appendGame(team.id, buildGameRecord(session));
-      DB.saveSession(null);
-      location.hash = `#/team/${team.id}`;
+      finishGame();
     });
 
     App.root.querySelector('#fc-edit-btn').addEventListener('click', () => {
@@ -940,14 +1162,44 @@ const Screens = {
              </div>`;
 
         return `
-          <div class="player-stat-row">
+          <div class="player-stat-row ${p.unavailable ? 'player-out' : ''}">
             <div class="player-stat-name">
               <span class="jersey-badge ${rp.number ? '' : 'no-number'}">${escapeHtml(rp.number || '?')}</span>${escapeHtml(rp.name)}
+              ${p.unavailable ? '<span class="out-tag">Out</span>' : ''}
             </div>
             ${barHtml}
             <div class="player-stat-detail">${chips.join('')}</div>
+            <div class="player-stat-actions">
+              <button class="secondary-btn small" data-toggle-unavailable="${rp.id}" type="button">${p.unavailable ? 'Mark Available' : 'Mark Out'}</button>
+              <button class="danger-btn small" data-remove-player="${rp.id}" type="button">Remove</button>
+            </div>
           </div>`;
       }).join('');
+
+      content.querySelectorAll('[data-toggle-unavailable]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const id = btn.getAttribute('data-toggle-unavailable');
+          const wasUnavailable = !!session.players[id].unavailable;
+          setUnavailable(session, id, !wasUnavailable, Date.now());
+          DB.saveSession(session);
+          renderInfoPanel();
+          rerender();
+        });
+      });
+
+      content.querySelectorAll('[data-remove-player]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const id = btn.getAttribute('data-remove-player');
+          const rp = rosterById[id];
+          showConfirm(`Remove ${rp ? rp.name : 'this player'} from today's game? Their time for this game will be lost.`, 'Remove').then((confirmed) => {
+            if (!confirmed) return;
+            removePlayerFromGame(session, id);
+            DB.saveSession(session);
+            renderInfoPanel();
+            rerender();
+          });
+        });
+      });
     }
 
     // Chronological log of every goal logged this game, each with an undo (delete) button - the
@@ -962,9 +1214,11 @@ const Screens = {
         const label = g.team === 'opponent'
           ? escapeHtml(session.opponentName || 'Opponent')
           : (() => {
-              const scorer = rosterById[g.scorerId];
+              const scorer = g.scorerId ? rosterById[g.scorerId] : null;
               const assistNames = (g.assistIds || []).map((id) => rosterById[id]).filter(Boolean).map((p) => p.name);
-              let text = escapeHtml(scorer ? scorer.name : '(removed)');
+              let text = g.scorerId
+                ? escapeHtml(scorer ? scorer.name : '(removed)')
+                : '<span class="goal-unknown">Unknown scorer</span>';
               if (assistNames.length) text += ` <span class="goal-assist">(assist: ${escapeHtml(assistNames.join(', '))})</span>`;
               return text;
             })();
@@ -972,9 +1226,17 @@ const Screens = {
           <div class="player-stat-row goal-log-row">
             <span class="goal-log-half">H${g.half}</span>
             <span class="goal-log-label">${label}</span>
+            ${g.team === 'us' ? `<button class="secondary-btn small" data-edit-goal="${g.id}" type="button">Edit</button>` : ''}
             <button class="danger-btn small" data-remove-goal="${g.id}" type="button">&times;</button>
           </div>`;
       }).join('');
+
+      content.querySelectorAll('[data-edit-goal]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const goal = session.goals.find((g) => g.id === btn.getAttribute('data-edit-goal'));
+          if (goal) editGoalFlow(goal);
+        });
+      });
 
       content.querySelectorAll('[data-remove-goal]').forEach((btn) => {
         btn.addEventListener('click', () => {
@@ -1030,7 +1292,11 @@ const Screens = {
       });
     }
 
-    function pickScorer() {
+    // Sentinel returned when the coach explicitly doesn't know who scored yet - distinct from
+    // `null`, which means the whole flow was cancelled (nothing should be recorded at all).
+    const UNKNOWN_SCORER = 'unknown-scorer';
+
+    function pickScorer(currentScorerId) {
       return new Promise((resolve) => {
         cancelGoalStep = () => resolve(closeGoalModal(null));
         const players = sortedRoster(Object.keys(session.players).map((id) => rosterById[id]).filter(Boolean));
@@ -1044,22 +1310,28 @@ const Screens = {
                   <label class="select-row">
                     <span class="jersey-badge ${p.number ? '' : 'no-number'}">${escapeHtml(p.number || '?')}</span>
                     <span class="player-name">${escapeHtml(p.name)}</span>
+                    ${p.id === currentScorerId ? '<span class="current-tag">current</span>' : ''}
                   </label>
                 </li>`).join('')}
             </ul>
-            <button class="secondary-btn" id="goal-scorer-cancel" type="button">Cancel</button>
+            <div class="confirm-actions">
+              <button class="secondary-btn" id="goal-scorer-unknown" type="button">Unknown Scorer</button>
+              <button class="secondary-btn" id="goal-scorer-cancel" type="button">Cancel</button>
+            </div>
           </div>
         `;
         goalModal.querySelectorAll('[data-scorer-id]').forEach((li) => {
           li.addEventListener('click', () => resolve(closeGoalModal(li.getAttribute('data-scorer-id'))));
         });
+        goalModal.querySelector('#goal-scorer-unknown').addEventListener('click', () => resolve(closeGoalModal(UNKNOWN_SCORER)));
         goalModal.querySelector('#goal-scorer-cancel').addEventListener('click', () => resolve(closeGoalModal(null)));
       });
     }
 
-    function pickAssists(scorerId) {
+    function pickAssists(scorerId, preselectedIds) {
       return new Promise((resolve) => {
         cancelGoalStep = () => resolve(closeGoalModal(null));
+        const preselected = preselectedIds || [];
         const players = sortedRoster(Object.keys(session.players).map((id) => rosterById[id]).filter(Boolean))
           .filter((p) => p.id !== scorerId);
         goalModal.hidden = false;
@@ -1070,7 +1342,7 @@ const Screens = {
               ${players.map((p) => `
                 <li class="player-row selectable">
                   <label class="select-row">
-                    <input type="checkbox" class="assist-check" value="${p.id}">
+                    <input type="checkbox" class="assist-check" value="${p.id}" ${preselected.includes(p.id) ? 'checked' : ''}>
                     <span class="jersey-badge ${p.number ? '' : 'no-number'}">${escapeHtml(p.number || '?')}</span>
                     <span class="player-name">${escapeHtml(p.name)}</span>
                   </label>
@@ -1084,12 +1356,12 @@ const Screens = {
           </div>
         `;
         const checks = Array.from(goalModal.querySelectorAll('.assist-check'));
-        checks.forEach((c) => {
-          c.addEventListener('change', () => {
-            const checkedCount = checks.filter((x) => x.checked).length;
-            checks.forEach((x) => { if (!x.checked) x.disabled = checkedCount >= 2; });
-          });
-        });
+        const updateDisabled = () => {
+          const checkedCount = checks.filter((x) => x.checked).length;
+          checks.forEach((x) => { if (!x.checked) x.disabled = checkedCount >= 2; });
+        };
+        checks.forEach((c) => c.addEventListener('change', updateDisabled));
+        updateDisabled();
         goalModal.querySelector('#assist-skip').addEventListener('click', () => resolve(closeGoalModal([])));
         goalModal.querySelector('#assist-confirm').addEventListener('click', () => {
           const ids = checks.filter((c) => c.checked).map((c) => c.value);
@@ -1106,14 +1378,45 @@ const Screens = {
         recordGoal(session, { team: 'opponent' });
       } else {
         const scorerId = await pickScorer();
-        if (!scorerId) return;
-        const assistIds = await pickAssists(scorerId);
-        if (assistIds === null) return; // cancelled - nothing was ever written
-        recordGoal(session, { team: 'us', scorerId, assistIds });
+        if (scorerId === null) return; // cancelled - nothing was ever written
+        if (scorerId === UNKNOWN_SCORER) {
+          // Coach doesn't know who scored yet - log the goal anyway so the score stays right,
+          // and fill in the scorer/assists later via the Edit button in the Goals list.
+          recordGoal(session, { team: 'us', scorerId: null, assistIds: [] });
+        } else {
+          const assistIds = await pickAssists(scorerId);
+          if (assistIds === null) return; // cancelled - nothing was ever written
+          recordGoal(session, { team: 'us', scorerId, assistIds });
+        }
       }
       DB.saveSession(session);
       renderScoreboard();
       showToast(`${session.score.us} - ${session.score.opponent}`);
+    }
+
+    // Fills in or corrects who scored/assisted a goal already on the board - same picker steps
+    // as recording a fresh goal, but writes into the existing entry via editGoal instead of
+    // adding a new one, so the score is untouched. Triggered from inside the (already open)
+    // Stats panel, so the panel is hidden for the duration - both modals share the same
+    // z-index and #info-panel sits later in the DOM, so it would otherwise paint over
+    // #goal-modal and swallow every tap - then reopened, refreshed, once editing is done.
+    async function editGoalFlow(goal) {
+      infoPanel.hidden = true;
+      try {
+        const scorerId = await pickScorer(goal.scorerId);
+        if (scorerId === null) return; // cancelled
+        if (scorerId === UNKNOWN_SCORER) {
+          editGoal(session, goal.id, { scorerId: null, assistIds: [] });
+        } else {
+          const assistIds = await pickAssists(scorerId, goal.assistIds || []);
+          if (assistIds === null) return; // cancelled
+          editGoal(session, goal.id, { scorerId, assistIds });
+        }
+        DB.saveSession(session);
+      } finally {
+        renderGoalLog();
+        infoPanel.hidden = false;
+      }
     }
 
     App.root.querySelector('#goal-btn').addEventListener('click', () => { openGoalFlow(); });

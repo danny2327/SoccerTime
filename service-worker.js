@@ -1,4 +1,4 @@
-const CACHE_NAME = 'soccertime-cache-v6';
+const CACHE_NAME = 'soccertime-cache-v17';
 const PRECACHE_URLS = [
   './',
   './index.html',
