@@ -70,4 +70,15 @@ const DB = {
     games.push(gameRecord);
     localStorage.setItem(STORAGE_KEYS.games(teamId), JSON.stringify(games));
   },
+
+  // Drops a team's whole season history - used when the team itself is deleted.
+  deleteGames(teamId) {
+    localStorage.removeItem(STORAGE_KEYS.games(teamId));
+  },
+
+  // Replaces one past game in place (matched by id) - used by the season's Edit Game screen.
+  updateGame(teamId, gameRecord) {
+    const games = DB.loadGames(teamId).map((g) => (g.id === gameRecord.id ? gameRecord : g));
+    localStorage.setItem(STORAGE_KEYS.games(teamId), JSON.stringify(games));
+  },
 };

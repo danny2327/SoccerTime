@@ -29,9 +29,14 @@ const App = {
       return Screens.gameSession();
     }
 
-    if (parts[0] === 'team' && parts[1]) return Screens.teamEdit(parts[1]);
-    if (parts[0] === 'start' && parts[1]) return Screens.startGame(parts[1]);
+    if (parts[0] === 'team' && parts[1] && parts[2] === 'roster') return Screens.teamEdit(parts[1]);
+    if (parts[0] === 'team' && parts[1]) return Screens.teamHome(parts[1]);
+    if (parts[0] === 'start' && parts[1]) {
+      history.replaceState(null, '', `#/team/${parts[1]}`);
+      return Screens.teamHome(parts[1]);
+    }
     if (parts[0] === 'game') return Screens.gameSession();
+    if (parts[0] === 'season' && parts[1] && parts[2] === 'game' && parts[3]) return Screens.editGame(parts[1], parts[3]);
     if (parts[0] === 'season' && parts[1]) return Screens.seasonHistory(parts[1]);
     if (parts[0] === 'seed-demo') return Screens.seedDemo();
     return Screens.teamsList();
@@ -70,6 +75,87 @@ const App = {
   },
 };
 
+// Team card colors - all dark enough to keep white text readable. A team without a color yet
+// (created before colors existed) shows the first one, the app's own green.
+const TEAM_COLORS = ['#1b5e20', '#1f5fa8', '#b3261e', '#6a3fa0', '#0f766e', '#a84a0c', '#1e3a5f', '#7f1d3f', '#333a2e'];
+
+function teamColor(team) {
+  return TEAM_COLORS.includes(team.color) ? team.color : TEAM_COLORS[0];
+}
+
+// The first color no other team is using yet, so each new team starts out distinct.
+function nextTeamColor(teams) {
+  const used = new Set(teams.map(teamColor));
+  return TEAM_COLORS.find((c) => !used.has(c)) || TEAM_COLORS[teams.length % TEAM_COLORS.length];
+}
+
+function setTeamColor(teamId, color) {
+  const teams = DB.loadTeams();
+  const team = teams.find((t) => t.id === teamId);
+  if (!team) return;
+  team.color = color;
+  DB.saveTeams(teams);
+}
+
+// A row of color swatches; tapping one selects it and reports it through onPick.
+function renderColorSwatches(container, selected, onPick) {
+  let current = selected;
+  const draw = () => {
+    container.innerHTML = TEAM_COLORS.map((c) => `
+      <button type="button" class="color-swatch ${c === current ? 'selected' : ''}" data-color="${c}"
+        style="background:${c}" aria-label="Color ${c}" aria-pressed="${c === current}">
+        ${c === current ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>' : ''}
+      </button>`).join('');
+    container.querySelectorAll('[data-color]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        current = btn.getAttribute('data-color');
+        onPick(current);
+        draw();
+      });
+    });
+  };
+  draw();
+}
+
+const DEMO_TEAM_NAME = 'Demo Team';
+const DEMO_PLAYERS = [
+  { number: '1', name: 'Gio Ortiz' },
+  { number: '2', name: 'Mason Lee' },
+  { number: '3', name: 'Casey Nguyen' },
+  { number: '4', name: 'Riley Chen' },
+  { number: '5', name: 'Sam Rivera' },
+  { number: '6', name: 'Alex Kim' },
+  { number: '7', name: 'Jordan Patel' },
+  { number: '8', name: 'Taylor Brooks' },
+  { number: '9', name: 'Morgan Diaz' },
+  { number: '10', name: 'Avery Wilson' },
+  { number: '11', name: 'Quinn Foster' },
+  { number: '12', name: 'Reese Adams' },
+  { number: '', name: 'Drew Park' }, // deliberately missing a jersey number
+];
+
+// Creates a 13-player demo team to try the app out with, replacing any earlier demo team
+// ("Dummy Team" was its old name). Asks first when one already exists, unless skipConfirm.
+async function createDemoTeam(skipConfirm) {
+  const isDemo = (t) => t.name === DEMO_TEAM_NAME || t.name === 'Dummy Team';
+  const all = DB.loadTeams();
+  if (!skipConfirm && all.some(isDemo)) {
+    const ok = await showConfirm('Replace the existing demo team with a fresh one?', 'Replace');
+    if (!ok) return;
+  }
+  const teams = all.filter((t) => !isDemo(t));
+  const team = {
+    id: uid(),
+    name: DEMO_TEAM_NAME,
+    color: nextTeamColor(teams),
+    players: DEMO_PLAYERS.map((p) => ({ id: uid(), name: p.name, number: p.number })),
+  };
+  teams.push(team);
+  DB.saveTeams(teams);
+  DB.saveSession(null);
+  location.hash = `#/team/${team.id}`;
+}
+
 const Screens = {
   teamsList() {
     const teams = DB.loadTeams();
@@ -79,76 +165,83 @@ const Screens = {
         <button id="install-btn" class="icon-btn" hidden title="Install app">Install</button>
         ${helpButtonHtml()}
       </header>
-      <main class="list-page">
+      <main class="list-page teams-page">
         ${teams.length === 0 ? `<p class="empty">No teams yet. Add one to get started.</p>` : ''}
         <ul class="team-list">
-          ${teams.map((t) => `
-            <li class="team-row">
-              <a href="#/team/${t.id}" class="team-link">
-                <span class="team-name">${escapeHtml(t.name)}</span>
-                <span class="team-meta">${t.players.length} player${t.players.length === 1 ? '' : 's'}</span>
-              </a>
-              <button class="danger-btn small" data-delete-team="${t.id}">Delete</button>
-            </li>`).join('')}
+          ${teams.map((t) => {
+            const games = DB.loadGames(t.id);
+            let w = 0, d = 0, l = 0;
+            games.forEach((g) => {
+              if (g.finalScore.us > g.finalScore.opponent) w++;
+              else if (g.finalScore.us < g.finalScore.opponent) l++;
+              else d++;
+            });
+            return `
+              <li class="team-card" style="background:${teamColor(t)}">
+                <a href="#/team/${t.id}" class="team-card-link">
+                  <span class="team-card-name">${escapeHtml(t.name)}</span>
+                  <span class="team-card-meta">
+                    ${t.players.length} player${t.players.length === 1 ? '' : 's'}${games.length ? ` &middot; ${w}-${d}-${l}` : ''}
+                  </span>
+                </a>
+                <button class="team-card-menu" data-team-menu="${t.id}" type="button" aria-label="Color for ${escapeHtml(t.name)}">&#8942;</button>
+              </li>`;
+          }).join('')}
         </ul>
-        <button id="new-team-btn" class="primary-btn big">+ New Team</button>
-        <p class="app-version-footer">SoccerTime ${escapeHtml(APP_VERSION)}</p>
+        <div class="teams-bottom">
+          <button id="new-team-btn" class="primary-btn big" type="button">${icon('plus')} New Team</button>
+          <button id="demo-team-btn" class="secondary-btn demo-team-btn" type="button">Load demo team</button>
+          <p class="app-version-footer">SoccerTime ${escapeHtml(APP_VERSION)}</p>
+        </div>
       </main>
     `;
 
-    App.root.querySelector('#new-team-btn').addEventListener('click', () => {
-      const name = prompt('Team name?');
-      if (!name || !name.trim()) return;
+    App.root.querySelector('#new-team-btn').addEventListener('click', async () => {
+      const name = await showTextPrompt('New team', { placeholder: 'Team name', confirmLabel: 'Create' });
+      if (!name) return;
       const allTeams = DB.loadTeams();
-      const team = { id: uid(), name: name.trim(), players: [] };
+      const team = { id: uid(), name, color: nextTeamColor(allTeams), players: [] };
       allTeams.push(team);
       DB.saveTeams(allTeams);
       location.hash = `#/team/${team.id}`;
     });
 
-    App.root.querySelectorAll('[data-delete-team]').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        e.preventDefault();
-        const id = btn.getAttribute('data-delete-team');
-        const t = teams.find((x) => x.id === id);
-        if (!confirm(`Delete "${t ? t.name : 'this team'}" and its roster? This can't be undone.`)) return;
-        const remaining = DB.loadTeams().filter((x) => x.id !== id);
-        DB.saveTeams(remaining);
-        Screens.teamsList();
+    App.root.querySelector('#demo-team-btn').addEventListener('click', () => { createDemoTeam(); });
+
+    // Per-team color picker (deleting a team lives in that team's own ... menu, away from here).
+    App.root.querySelectorAll('[data-team-menu]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-team-menu');
+        const t = DB.loadTeams().find((x) => x.id === id);
+        if (!t) return;
+        const modal = document.createElement('div');
+        modal.className = 'modal';
+        modal.innerHTML = `
+          <div class="modal-card">
+            <div class="panel-header">
+              <h2>${escapeHtml(t.name)}</h2>
+              <button class="panel-close-btn" data-close type="button" aria-label="Close">${icon('close', 20)}</button>
+            </div>
+            <h3 class="goal-edit-label">Team color</h3>
+            <div class="color-swatches"></div>
+            <button class="primary-btn big" data-close type="button">Done</button>
+          </div>
+        `;
+        document.body.appendChild(modal);
+        const close = () => { modal.remove(); Screens.teamsList(); };
+        renderColorSwatches(modal.querySelector('.color-swatches'), teamColor(t), (color) => setTeamColor(t.id, color));
+        modal.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', close));
+        modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
       });
     });
 
     wireHelpButton();
   },
 
-  // Hidden dev/testing route: visiting #/seed-demo (re)creates a 13-player "Dummy Team" so a
-  // roster doesn't need to be typed in by hand every time. Not linked from anywhere in the UI.
+  // Dev/testing route: visiting #/seed-demo creates the demo team directly (the Teams screen's
+  // "Load demo team" button does the same, with a confirm if one already exists).
   seedDemo() {
-    const DUMMY_PLAYERS = [
-      { number: '1', name: 'Gio Ortiz' },
-      { number: '2', name: 'Mason Lee' },
-      { number: '3', name: 'Casey Nguyen' },
-      { number: '4', name: 'Riley Chen' },
-      { number: '5', name: 'Sam Rivera' },
-      { number: '6', name: 'Alex Kim' },
-      { number: '7', name: 'Jordan Patel' },
-      { number: '8', name: 'Taylor Brooks' },
-      { number: '9', name: 'Morgan Diaz' },
-      { number: '10', name: 'Avery Wilson' },
-      { number: '11', name: 'Quinn Foster' },
-      { number: '12', name: 'Reese Adams' },
-      { number: '', name: 'Drew Park' }, // deliberately missing a jersey number
-    ];
-    const teams = DB.loadTeams().filter((t) => t.name !== 'Dummy Team');
-    const team = {
-      id: uid(),
-      name: 'Dummy Team',
-      players: DUMMY_PLAYERS.map((p) => ({ id: uid(), name: p.name, number: p.number })),
-    };
-    teams.push(team);
-    DB.saveTeams(teams);
-    DB.saveSession(null);
-    location.hash = `#/team/${team.id}`;
+    createDemoTeam(true);
   },
 
   teamEdit(teamId) {
@@ -156,18 +249,17 @@ const Screens = {
     const team = teams.find((t) => t.id === teamId);
     if (!team) { location.hash = '#/teams'; return; }
 
-    // A brand-new team needs its whole roster typed in right away, so start with the entry
-    // form open; an existing team rarely gets a single late addition, so keep it tucked away
-    // behind the header button until asked for. Persists across re-renders within this screen.
+    // The full roster editor (rename, renumber, delete, add), reached from the team home's menu.
+    // An empty roster starts with the entry form open; otherwise it stays tucked behind the
+    // Add player row. Persists across re-renders within this screen.
     let addFormOpen = team.players.length === 0;
 
     const render = () => {
       const sorted = sortedRoster(team.players);
       App.root.innerHTML = `
         <header class="topbar">
-          <a href="#/teams" class="back-link" aria-label="Back to teams">${icon('back', 22)}</a>
-          <h1>${escapeHtml(team.name)}</h1>
-          <a href="#/season/${team.id}" class="icon-btn">${icon('calendar')} Season</a>
+          <a href="#/team/${team.id}" class="back-link" aria-label="Back to ${escapeHtml(team.name)}">${icon('back', 22)}</a>
+          <h1>${escapeHtml(team.name)} Roster</h1>
           ${helpButtonHtml()}
         </header>
         <main class="list-page">
@@ -186,7 +278,7 @@ const Screens = {
             <input type="text" id="new-name" placeholder="Player name" class="name-input" required>
             <button type="submit" class="primary-btn small">Add</button>
           </form>
-          <button id="start-game-btn" class="primary-btn big" ${team.players.length === 0 ? 'disabled' : ''}>Start Game &rarr;</button>
+          <a href="#/team/${team.id}" class="primary-btn big roster-done-btn">Done</a>
         </main>
         <div id="player-modal" class="modal" hidden></div>
       `;
@@ -273,10 +365,6 @@ const Screens = {
         render();
       });
 
-      App.root.querySelector('#start-game-btn').addEventListener('click', () => {
-        location.hash = `#/start/${team.id}`;
-      });
-
       wireHelpButton();
     };
 
@@ -329,12 +417,15 @@ const Screens = {
               const result = g.finalScore.us > g.finalScore.opponent ? 'W' : (g.finalScore.us < g.finalScore.opponent ? 'L' : 'D');
               return `
                 <li class="player-row season-game-row">
-                  <span class="result-badge result-${result}">${result}</span>
-                  <span class="season-game-info">
-                    <span class="season-game-opponent">${escapeHtml(g.opponentName || 'Opponent')}</span>
-                    <span class="panel-hint">${new Date(g.date).toLocaleDateString()}</span>
-                  </span>
-                  <span class="season-game-score">${g.finalScore.us}&ndash;${g.finalScore.opponent}</span>
+                  <a href="#/season/${team.id}/game/${g.id}" class="season-game-link" aria-label="Edit game vs ${escapeHtml(g.opponentName || 'Opponent')}">
+                    <span class="result-badge result-${result}">${result}</span>
+                    <span class="season-game-info">
+                      <span class="season-game-opponent">${escapeHtml(g.opponentName || 'Opponent')}</span>
+                      <span class="panel-hint">${g.date ? new Date(g.date).toLocaleDateString() : 'No date'}</span>
+                    </span>
+                    <span class="season-game-score">${g.finalScore.us}&ndash;${g.finalScore.opponent}</span>
+                    <span class="season-game-chevron">${icon('chevron', 16)}</span>
+                  </a>
                 </li>`;
             }).join('')}
           </ul>
@@ -353,86 +444,448 @@ const Screens = {
     `;
   },
 
-  startGame(teamId) {
+  // Edit a finished game from the season: date, opponent, and the goal list. The score isn't
+  // typed in directly - it's derived from the goals (scoreFromGoals), so adding, removing or
+  // re-crediting a goal keeps the score and the season leaderboard in step. All edits go into a
+  // draft copy and only reach storage on Save.
+  editGame(teamId, gameId) {
+    const teams = DB.loadTeams();
+    const team = teams.find((t) => t.id === teamId);
+    if (!team) { location.hash = '#/teams'; return; }
+    const original = DB.loadGames(teamId).find((g) => g.id === gameId);
+    if (!original) { location.hash = `#/season/${teamId}`; return; }
+    const rosterById = Object.fromEntries(team.players.map((p) => [p.id, p]));
+
+    const draft = JSON.parse(JSON.stringify(original));
+    draft.goals = draft.goals || [];
+    // A record whose score is ahead of its goal list (shouldn't happen, but cheap to guard) gets
+    // unknown goals padded in, so deriving the score from goals never silently lowers it.
+    const saved = draft.finalScore || { us: 0, opponent: 0 };
+    const counted = scoreFromGoals(draft.goals);
+    for (let i = counted.us; i < saved.us; i++) draft.goals.push({ id: uid(), team: 'us', half: null, at: null, scorerId: null, assistIds: [] });
+    for (let i = counted.opponent; i < saved.opponent; i++) draft.goals.push({ id: uid(), team: 'opponent', half: null, at: null });
+    const startingJson = JSON.stringify(draft);
+
+    const toDateInput = (ts) => {
+      if (!ts) return '';
+      const d = new Date(ts);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    };
+    const playerName = (id) => (rosterById[id] ? rosterById[id].name : '(removed player)');
+
+    App.root.innerHTML = `
+      <header class="topbar">
+        <a href="#/season/${team.id}" class="back-link" id="eg-back" aria-label="Back to season">${icon('back', 22)}</a>
+        <h1>Edit Game</h1>
+      </header>
+      <main class="list-page">
+        <section class="field-count-picker">
+          <label for="eg-date">Date</label>
+          <input type="date" id="eg-date" class="opponent-input" value="${toDateInput(draft.date)}">
+        </section>
+        <section class="field-count-picker">
+          <label for="eg-opponent">Opponent</label>
+          <input type="text" id="eg-opponent" class="opponent-input" placeholder="Opponent name" value="${escapeHtml(draft.opponentName || '')}">
+        </section>
+        <div class="edit-score" id="eg-score"></div>
+        <h2 class="section-label">${escapeHtml(team.name)} goals</h2>
+        <ul class="player-list" id="eg-goals"></ul>
+        <button id="eg-add-goal" class="add-row-btn" type="button">${icon('plus')} Add goal</button>
+        <h2 class="section-label">Opponent goals</h2>
+        <section class="field-count-picker">
+          <label>Goals conceded</label>
+          <div class="stepper">
+            <button id="eg-opp-minus" class="stepper-btn" type="button" aria-label="Remove opponent goal">&minus;</button>
+            <span id="eg-opp-value" class="stepper-value"></span>
+            <button id="eg-opp-plus" class="stepper-btn" type="button" aria-label="Add opponent goal">+</button>
+          </div>
+        </section>
+        <div class="confirm-actions edit-game-actions">
+          <button class="secondary-btn" id="eg-cancel" type="button">Cancel</button>
+          <button class="primary-btn" id="eg-save" type="button">Save</button>
+        </div>
+      </main>
+      <div id="eg-goal-modal" class="modal" hidden></div>
+    `;
+
+    const goalsList = App.root.querySelector('#eg-goals');
+    const goalModal = App.root.querySelector('#eg-goal-modal');
+
+    function render() {
+      const score = scoreFromGoals(draft.goals);
+      const opp = App.root.querySelector('#eg-opponent').value.trim() || 'Opponent';
+      App.root.querySelector('#eg-score').innerHTML = `
+        <span class="score-team-name">${escapeHtml(team.name)}</span>
+        <span class="edit-score-value">${score.us} &ndash; ${score.opponent}</span>
+        <span class="score-team-name">${escapeHtml(opp)}</span>`;
+      App.root.querySelector('#eg-opp-value').textContent = score.opponent;
+
+      const ours = draft.goals.filter((g) => g.team === 'us');
+      goalsList.innerHTML = ours.length === 0
+        ? '<li class="empty edit-goals-empty">No goals</li>'
+        : ours.map((g) => {
+            const assists = (g.assistIds || []).map(playerName);
+            const label = g.scorerId
+              ? escapeHtml(playerName(g.scorerId))
+              : '<span class="goal-unknown">Unknown scorer</span>';
+            return `
+              <li class="player-row goal-log-row">
+                <span class="goal-log-half">${g.half ? `H${g.half}` : '&ndash;'}</span>
+                <span class="goal-log-label">${label}${assists.length ? ` <span class="goal-assist">(assist: ${escapeHtml(assists.join(', '))})</span>` : ''}</span>
+                <button class="secondary-btn small" data-edit-goal="${g.id}" type="button">Edit</button>
+                <button class="danger-btn small" data-remove-goal="${g.id}" type="button" aria-label="Remove goal">&times;</button>
+              </li>`;
+          }).join('');
+
+      goalsList.querySelectorAll('[data-edit-goal]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const goal = draft.goals.find((g) => g.id === btn.getAttribute('data-edit-goal'));
+          if (goal) openGoalEditor(goal);
+        });
+      });
+      goalsList.querySelectorAll('[data-remove-goal]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          draft.goals = draft.goals.filter((g) => g.id !== btn.getAttribute('data-remove-goal'));
+          render();
+        });
+      });
+    }
+
+    // One form for a goal - half, scorer and up to 2 assists - used for both editing an existing
+    // goal and adding a new one (goal === null). Unlike the live game's step-by-step picker, a
+    // past game is edited at leisure, so everything sits on one card.
+    function openGoalEditor(goal) {
+      const isNew = !goal;
+      const state = {
+        half: goal ? goal.half : 1,
+        scorerId: goal ? goal.scorerId : null,
+        assistIds: goal ? (goal.assistIds || []).slice() : [],
+      };
+      // Anyone already credited on this goal stays pickable even if they've since left the roster.
+      const pickable = sortedRoster(team.players);
+      [state.scorerId, ...state.assistIds].filter((id) => id && !rosterById[id])
+        .forEach((id) => pickable.push({ id, name: '(removed player)', number: '' }));
+
+      function close() { goalModal.hidden = true; goalModal.innerHTML = ''; }
+
+      function draw() {
+        const assistChoices = pickable.filter((p) => p.id !== state.scorerId);
+        goalModal.innerHTML = `
+          <div class="modal-card">
+            <h2>${isNew ? 'Add goal' : 'Edit goal'}</h2>
+            <div class="goal-edit-field">
+              <span class="goal-edit-label">Half</span>
+              <div class="segmented">
+                ${[1, 2].map((h) => `<button type="button" class="segmented-btn ${state.half === h ? 'selected' : ''}" data-half="${h}">H${h}</button>`).join('')}
+              </div>
+            </div>
+            <div class="goal-edit-field">
+              <label class="goal-edit-label" for="ge-scorer">Scorer</label>
+              <select id="ge-scorer" class="goal-edit-select">
+                <option value="">Unknown scorer</option>
+                ${pickable.map((p) => `<option value="${p.id}" ${p.id === state.scorerId ? 'selected' : ''}>${p.number ? `#${escapeHtml(p.number)} ` : ''}${escapeHtml(p.name)}</option>`).join('')}
+              </select>
+            </div>
+            ${state.scorerId ? `
+              <h3 class="goal-edit-label">Assists <span class="panel-hint">(up to 2)</span></h3>
+              <ul class="player-list goal-edit-assists">
+                ${assistChoices.map((p) => `
+                  <li class="player-row selectable">
+                    <label class="select-row">
+                      <input type="checkbox" class="assist-check" value="${p.id}" ${state.assistIds.includes(p.id) ? 'checked' : ''}
+                        ${!state.assistIds.includes(p.id) && state.assistIds.length >= 2 ? 'disabled' : ''}>
+                      <span class="jersey-badge ${p.number ? '' : 'no-number'}">${escapeHtml(p.number || '?')}</span>
+                      <span class="player-name">${escapeHtml(p.name)}</span>
+                    </label>
+                  </li>`).join('')}
+              </ul>` : ''}
+            <div class="confirm-actions">
+              <button class="secondary-btn" id="ge-cancel" type="button">Cancel</button>
+              <button class="primary-btn" id="ge-save" type="button">${isNew ? 'Add' : 'Done'}</button>
+            </div>
+          </div>
+        `;
+        goalModal.querySelectorAll('[data-half]').forEach((btn) => {
+          btn.addEventListener('click', () => { state.half = Number(btn.getAttribute('data-half')); draw(); });
+        });
+        goalModal.querySelector('#ge-scorer').addEventListener('change', (e) => {
+          state.scorerId = e.target.value || null;
+          state.assistIds = state.assistIds.filter((id) => id !== state.scorerId);
+          if (!state.scorerId) state.assistIds = [];
+          draw();
+        });
+        goalModal.querySelectorAll('.assist-check').forEach((c) => {
+          c.addEventListener('change', () => {
+            state.assistIds = c.checked
+              ? [...state.assistIds, c.value].slice(0, 2)
+              : state.assistIds.filter((id) => id !== c.value);
+            draw();
+          });
+        });
+        goalModal.querySelector('#ge-cancel').addEventListener('click', close);
+        goalModal.querySelector('#ge-save').addEventListener('click', () => {
+          if (isNew) {
+            draft.goals.push({ id: uid(), team: 'us', half: state.half, at: null, scorerId: state.scorerId, assistIds: state.assistIds });
+          } else {
+            goal.half = state.half;
+            goal.scorerId = state.scorerId;
+            goal.assistIds = state.assistIds;
+          }
+          close();
+          render();
+        });
+      }
+
+      goalModal.hidden = false;
+      draw();
+    }
+    goalModal.addEventListener('click', (e) => { if (e.target === goalModal) { goalModal.hidden = true; goalModal.innerHTML = ''; } });
+
+    App.root.querySelector('#eg-add-goal').addEventListener('click', () => openGoalEditor(null));
+    App.root.querySelector('#eg-opponent').addEventListener('input', () => render());
+
+    App.root.querySelector('#eg-opp-plus').addEventListener('click', () => {
+      draft.goals.push({ id: uid(), team: 'opponent', half: null, at: null });
+      render();
+    });
+    App.root.querySelector('#eg-opp-minus').addEventListener('click', () => {
+      const lastIdx = draft.goals.map((g) => g.team).lastIndexOf('opponent');
+      if (lastIdx === -1) return;
+      draft.goals.splice(lastIdx, 1);
+      render();
+    });
+
+    // Pulls the two plain fields into the draft. The date keeps the game's original time of day
+    // (or noon, for a record that never had one) so re-saving doesn't shift it across midnight.
+    function syncFields() {
+      draft.opponentName = App.root.querySelector('#eg-opponent').value.trim();
+      const dateVal = App.root.querySelector('#eg-date').value;
+      if (dateVal) {
+        const [y, m, d] = dateVal.split('-').map(Number);
+        const base = draft.date ? new Date(draft.date) : new Date(y, m - 1, d, 12);
+        base.setFullYear(y, m - 1, d);
+        draft.date = base.getTime();
+      }
+    }
+
+    async function leave() {
+      syncFields();
+      if (JSON.stringify(draft) !== startingJson) {
+        const discard = await showConfirm('Discard your changes to this game?', 'Discard');
+        if (!discard) return;
+      }
+      location.hash = `#/season/${team.id}`;
+    }
+
+    App.root.querySelector('#eg-back').addEventListener('click', (e) => { e.preventDefault(); leave(); });
+    App.root.querySelector('#eg-cancel').addEventListener('click', () => leave());
+    App.root.querySelector('#eg-save').addEventListener('click', () => {
+      syncFields();
+      draft.finalScore = scoreFromGoals(draft.goals);
+      DB.updateGame(team.id, draft);
+      showToast('Game saved');
+      location.hash = `#/season/${team.id}`;
+    });
+
+    render();
+  },
+
+  // A team's home screen, where picking a team lands: who's here today, the opponent, and Begin
+  // Game. Things that rarely change live behind the ... menu instead - the full roster editor,
+  // and team settings (players on field, half length), which are also summarised in one tappable
+  // line so the coach can see what the game will use without them taking up the screen.
+  teamHome(teamId) {
     const teams = DB.loadTeams();
     const team = teams.find((t) => t.id === teamId);
     if (!team) { location.hash = '#/teams'; return; }
 
-    const settings = DB.loadTeamSettings(teamId);
-    let fieldCount = clamp(settings.fieldCount || 7, 3, 15);
-    let halfLength = clamp(settings.halfLengthMinutes || 25, 5, 60);
-    const sorted = sortedRoster(team.players);
+    // Players ticked off as absent, and the typed opponent - both kept across re-renders (adding a
+    // player, changing settings) so nothing the coach already entered gets reset.
+    const absentIds = new Set();
+    let opponentName = '';
+    const returned = App._returnState && App._returnState.teamId === teamId ? App._returnState : null;
+    App._returnState = null;
+    if (returned) {
+      opponentName = returned.opponentName;
+      team.players.forEach((p) => { if (!returned.presentIds.includes(p.id)) absentIds.add(p.id); });
+    }
+    let addFormOpen = team.players.length === 0;
 
-    App.root.innerHTML = `
-      <header class="topbar">
-        <a href="#/team/${team.id}" class="back-link" aria-label="Back to ${escapeHtml(team.name)}">${icon('back', 22)}</a>
-        <h1>Start Game</h1>
-        ${helpButtonHtml()}
-      </header>
-      <main class="list-page">
-        <section class="field-count-picker">
-          <label>Players on field<span class="field-count-sublabel">Total, including the goalie (e.g. 7v7 &rarr; 7)</span></label>
-          <div class="stepper">
-            <button id="fc-minus" class="stepper-btn" type="button">&minus;</button>
-            <span id="fc-value" class="stepper-value">${fieldCount}</span>
-            <button id="fc-plus" class="stepper-btn" type="button">+</button>
+    function render() {
+      const settings = DB.loadTeamSettings(teamId);
+      const fieldCount = clamp(settings.fieldCount || 7, 3, 15);
+      const halfLength = clamp(settings.halfLengthMinutes || 25, 5, 60);
+      const sorted = sortedRoster(team.players);
+      const presentCount = sorted.filter((p) => !absentIds.has(p.id)).length;
+
+      App.root.innerHTML = `
+        <header class="topbar has-menu">
+          <a href="#/teams" class="back-link" aria-label="Back to teams">${icon('back', 22)}</a>
+          <h1>${escapeHtml(team.name)}</h1>
+          <a href="#/season/${team.id}" class="icon-btn">${icon('calendar')} Season</a>
+          <button id="team-menu-btn" class="icon-btn icon-only" type="button" aria-label="Team menu" aria-haspopup="true">${MORE_ICON}</button>
+          <div id="team-menu" class="menu-layer" hidden>
+            <div class="menu-backdrop"></div>
+            <div id="team-menu-card" class="settings-dropdown">
+              <a href="#/team/${team.id}/roster" class="settings-item">${icon('players', 20)} Edit roster</a>
+              <button id="team-settings-btn" class="settings-item" type="button">${icon('field', 20)} Team settings</button>
+              <div class="menu-divider"></div>
+              <button id="team-help-btn" class="settings-item" type="button">${icon('help', 20)} Help &amp; feedback</button>
+              <div class="menu-divider"></div>
+              <button id="team-delete-btn" class="settings-item settings-item-danger" type="button">${icon('trash', 20)} Delete team</button>
+              <div class="settings-version">${escapeHtml(APP_VERSION)}</div>
+            </div>
           </div>
-        </section>
-        <section class="field-count-picker">
-          <label>Half length<span class="field-count-sublabel">Minutes per half</span></label>
-          <div class="stepper">
-            <button id="hl-minus" class="stepper-btn" type="button">&minus;</button>
-            <span id="hl-value" class="stepper-value">${halfLength}</span>
-            <button id="hl-plus" class="stepper-btn" type="button">+</button>
+        </header>
+        <main class="list-page">
+          <button id="settings-summary" class="settings-summary" type="button">
+            ${icon('field')} <span>${fieldCount} on field &middot; ${halfLength} min halves</span>
+            <span class="settings-summary-edit">Change</span>
+          </button>
+          <section class="field-count-picker">
+            <label for="opponent-name">Opponent<span class="field-count-sublabel">Optional - shown on the scoreboard</span></label>
+            <input type="text" id="opponent-name" class="opponent-input" placeholder="Opponent name" value="${escapeHtml(opponentName)}">
+          </section>
+          <h2 class="section-label section-label-row">
+            <span>Who's here today?</span>
+            ${sorted.length ? `<span class="section-count">${presentCount} of ${sorted.length}</span>` : ''}
+          </h2>
+          <ul class="player-list select-list" id="present-list">
+            ${sorted.map((p) => `
+              <li class="player-row selectable">
+                <label class="select-row">
+                  <input type="checkbox" class="present-check" value="${p.id}" ${absentIds.has(p.id) ? '' : 'checked'}>
+                  <span class="jersey-badge ${p.number ? '' : 'no-number'}">${escapeHtml(p.number || '?')}</span>
+                  <span class="player-name">${escapeHtml(p.name)}</span>
+                </label>
+              </li>`).join('')}
+          </ul>
+          ${team.players.length === 0 ? '<p class="empty">No players yet - add your roster below.</p>' : ''}
+          <button id="add-player-toggle-btn" class="add-row-btn" type="button" ${addFormOpen ? 'hidden' : ''}>${icon('plus')} Add player</button>
+          <form id="add-player-form" class="add-player-form" ${addFormOpen ? '' : 'hidden'}>
+            <input type="text" id="new-number" placeholder="#" inputmode="numeric" pattern="[0-9]*" maxlength="3" class="number-input">
+            <input type="text" id="new-name" placeholder="Player name" class="name-input" required>
+            <button type="submit" class="primary-btn small">Add</button>
+          </form>
+          <button id="begin-btn" class="primary-btn big" type="button" ${presentCount === 0 ? 'disabled' : ''}>Begin Game &rarr;</button>
+        </main>
+        <div id="team-settings-modal" class="modal" hidden></div>
+      `;
+
+      // --- ... menu ---
+      const menu = App.root.querySelector('#team-menu');
+      const menuCard = App.root.querySelector('#team-menu-card');
+      App.root.querySelector('#team-menu-btn').addEventListener('click', () => { menu.hidden = !menu.hidden; });
+      menu.addEventListener('click', (e) => {
+        if (!menuCard.contains(e.target) || e.target.closest('.settings-item')) menu.hidden = true;
+      });
+      App.root.querySelector('#team-help-btn').addEventListener('click', () => showHelpMenu());
+      App.root.querySelector('#team-delete-btn').addEventListener('click', async () => {
+        const games = DB.loadGames(team.id).length;
+        const msg = `Delete "${team.name}", its roster${games ? ` and ${games} game${games === 1 ? '' : 's'} of season history` : ''}? This can't be undone.`;
+        if (!await showConfirm(msg, 'Delete', true)) return;
+        DB.saveTeams(DB.loadTeams().filter((x) => x.id !== team.id));
+        DB.deleteGames(team.id);
+        location.hash = '#/teams';
+      });
+      App.root.querySelector('#team-settings-btn').addEventListener('click', () => openTeamSettings());
+      App.root.querySelector('#settings-summary').addEventListener('click', () => openTeamSettings());
+
+      // --- Who's here ---
+      App.root.querySelector('#opponent-name').addEventListener('input', (e) => { opponentName = e.target.value; });
+      App.root.querySelectorAll('.present-check').forEach((c) => {
+        c.addEventListener('change', () => {
+          if (c.checked) absentIds.delete(c.value); else absentIds.add(c.value);
+          const count = sorted.filter((p) => !absentIds.has(p.id)).length;
+          const countEl = App.root.querySelector('.section-count');
+          if (countEl) countEl.textContent = `${count} of ${sorted.length}`;
+          App.root.querySelector('#begin-btn').disabled = count === 0;
+        });
+      });
+
+      // --- Quick add: a new player joins the roster and is marked as here ---
+      App.root.querySelector('#add-player-toggle-btn').addEventListener('click', (e) => {
+        addFormOpen = true;
+        e.currentTarget.hidden = true;
+        App.root.querySelector('#add-player-form').hidden = false;
+        App.root.querySelector('#new-number').focus();
+      });
+      App.root.querySelector('#add-player-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const name = App.root.querySelector('#new-name').value.trim();
+        if (!name) return;
+        team.players.push({ id: uid(), name, number: App.root.querySelector('#new-number').value.trim() });
+        DB.saveTeams(teams);
+        render();
+        App.root.querySelector('#new-number').focus();
+      });
+
+      App.root.querySelector('#begin-btn').addEventListener('click', () => {
+        const presentIds = sorted.filter((p) => !absentIds.has(p.id)).map((p) => p.id);
+        if (presentIds.length === 0) return;
+        startSession(team, presentIds, fieldCount, halfLength, opponentName.trim());
+        location.hash = '#/game';
+      });
+    }
+
+    // Team settings: the two per-team game defaults, saved as they're changed.
+    function openTeamSettings() {
+      const modal = App.root.querySelector('#team-settings-modal');
+      const settings = DB.loadTeamSettings(teamId);
+      let fieldCount = clamp(settings.fieldCount || 7, 3, 15);
+      let halfLength = clamp(settings.halfLengthMinutes || 25, 5, 60);
+      modal.innerHTML = `
+        <div class="modal-card">
+          <div class="panel-header">
+            <h2>Team settings</h2>
+            <button class="panel-close-btn" data-close type="button" aria-label="Close">${icon('close', 20)}</button>
           </div>
-        </section>
-        <section class="field-count-picker">
-          <label>Opponent<span class="field-count-sublabel">Optional - shown on the scoreboard</span></label>
-          <input type="text" id="opponent-name" class="opponent-input" placeholder="Opponent name">
-        </section>
-        <h2 class="section-label">Who's here today?</h2>
-        <ul class="player-list select-list" id="present-list">
-          ${sorted.map((p) => `
-            <li class="player-row selectable">
-              <label class="select-row">
-                <input type="checkbox" class="present-check" value="${p.id}" checked>
-                <span class="jersey-badge ${p.number ? '' : 'no-number'}">${escapeHtml(p.number || '?')}</span>
-                <span class="player-name">${escapeHtml(p.name)}</span>
-              </label>
-            </li>`).join('')}
-        </ul>
-        ${team.players.length === 0 ? '<p class="empty">This team has no players yet.</p>' : ''}
-        <button id="begin-btn" class="primary-btn big">Begin Game</button>
-      </main>
-    `;
+          <section class="field-count-picker">
+            <label>Players on field<span class="field-count-sublabel">Total, including the goalie (e.g. 7v7 &rarr; 7)</span></label>
+            <div class="stepper">
+              <button id="fc-minus" class="stepper-btn" type="button" aria-label="Fewer players">&minus;</button>
+              <span id="fc-value" class="stepper-value">${fieldCount}</span>
+              <button id="fc-plus" class="stepper-btn" type="button" aria-label="More players">+</button>
+            </div>
+          </section>
+          <section class="field-count-picker">
+            <label>Half length<span class="field-count-sublabel">Minutes per half</span></label>
+            <div class="stepper">
+              <button id="hl-minus" class="stepper-btn" type="button" aria-label="Shorter halves">&minus;</button>
+              <span id="hl-value" class="stepper-value">${halfLength}</span>
+              <button id="hl-plus" class="stepper-btn" type="button" aria-label="Longer halves">+</button>
+            </div>
+          </section>
+          <h3 class="goal-edit-label team-settings-color-label">Team color</h3>
+          <div class="color-swatches"></div>
+          <button class="primary-btn big" data-close type="button">Done</button>
+        </div>
+      `;
+      renderColorSwatches(modal.querySelector('.color-swatches'), teamColor(team), (color) => {
+        team.color = color;
+        setTeamColor(team.id, color);
+      });
+      modal.hidden = false;
+      const close = () => { modal.hidden = true; modal.innerHTML = ''; render(); };
+      modal.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', close));
+      modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+      const updateFC = (delta) => {
+        fieldCount = clamp(fieldCount + delta, 3, 15);
+        modal.querySelector('#fc-value').textContent = fieldCount;
+        DB.saveTeamSettings(teamId, { fieldCount });
+      };
+      const updateHL = (delta) => {
+        halfLength = clamp(halfLength + delta, 5, 60);
+        modal.querySelector('#hl-value').textContent = halfLength;
+        DB.saveTeamSettings(teamId, { halfLengthMinutes: halfLength });
+      };
+      modal.querySelector('#fc-minus').addEventListener('click', () => updateFC(-1));
+      modal.querySelector('#fc-plus').addEventListener('click', () => updateFC(1));
+      modal.querySelector('#hl-minus').addEventListener('click', () => updateHL(-5));
+      modal.querySelector('#hl-plus').addEventListener('click', () => updateHL(5));
+    }
 
-    const fcValue = App.root.querySelector('#fc-value');
-    const updateFC = (delta) => {
-      fieldCount = clamp(fieldCount + delta, 3, 15);
-      fcValue.textContent = fieldCount;
-      DB.saveTeamSettings(teamId, { fieldCount });
-    };
-    App.root.querySelector('#fc-minus').addEventListener('click', () => updateFC(-1));
-    App.root.querySelector('#fc-plus').addEventListener('click', () => updateFC(1));
-
-    const hlValue = App.root.querySelector('#hl-value');
-    const updateHL = (delta) => {
-      halfLength = clamp(halfLength + delta, 5, 60);
-      hlValue.textContent = halfLength;
-      DB.saveTeamSettings(teamId, { halfLengthMinutes: halfLength });
-    };
-    App.root.querySelector('#hl-minus').addEventListener('click', () => updateHL(-5));
-    App.root.querySelector('#hl-plus').addEventListener('click', () => updateHL(5));
-
-    App.root.querySelector('#begin-btn').addEventListener('click', () => {
-      const presentIds = Array.from(App.root.querySelectorAll('.present-check:checked')).map((c) => c.value);
-      if (presentIds.length === 0) { alert('Select at least one player who is here today.'); return; }
-      const opponentName = App.root.querySelector('#opponent-name').value.trim();
-      startSession(team, presentIds, fieldCount, halfLength, opponentName);
-      location.hash = '#/game';
-    });
-
-    wireHelpButton();
+    render();
   },
 
   gameSession() {
@@ -487,6 +940,20 @@ const Screens = {
 
     // Shared by the manual "End Game" action and the automatic full-time finish below - files
     // the session away into the team's season history and drops the coach back on the team page.
+    // Until the first kickoff nothing has been played, so backing out just throws the setup away
+    // and returns to the team screen - with the same opponent and who's-here picks filled back
+    // in (via App._returnState), so the coach can adjust and Begin Game again.
+    const preKickoff = !session.kickoffAt;
+    function cancelSetup() {
+      App._returnState = {
+        teamId: team.id,
+        opponentName: session.opponentName || '',
+        presentIds: Object.keys(session.players),
+      };
+      DB.saveSession(null);
+      location.hash = `#/team/${team.id}`;
+    }
+
     function finishGame() {
       DB.appendGame(team.id, buildGameRecord(session));
       DB.saveSession(null);
@@ -495,6 +962,7 @@ const Screens = {
 
     App.root.innerHTML = `
       <header class="topbar game-header">
+        ${preKickoff ? `<button id="cancel-setup-btn" class="back-link" type="button" aria-label="Back to ${escapeHtml(team.name)}">${icon('back', 22)}</button>` : ''}
         <button id="goal-btn" class="icon-btn goal-btn" type="button" ${session.live ? '' : 'disabled'}>${icon('goal')} Goal</button>
         <div class="header-center">
           ${session.live ? `<span id="half-clock" class="half-clock">${halfClockLabel(Date.now())}</span>` : ''}
@@ -663,28 +1131,31 @@ const Screens = {
       return `Field ${formatDuration(Math.max(0, field - goalie))}`;
     }
 
-    // Which on-field players are "due" for a sub next: the N with the most outfield time
+    // Which on-field outfield players are "due" for a sub next: the N with the most outfield time
     // (goalie time excluded, same as outfieldTimeLabelFor), where N is however many available
     // (non-unavailable) players are waiting on the bench - that's how many could actually come
-    // on right now. No bench, no candidates. If everyone on the field has the same time (e.g. at
-    // kickoff) there's no meaningful "most time", so no candidates either - compared in whole
-    // seconds, as displayed, so millisecond differences in when players went on don't count.
+    // on right now. No bench, no candidates.
+    // - The current goalie is left out entirely: their outfield time stands still while in goal,
+    //   so counting them would make a field of evenly-played outfielders look uneven.
+    // - If every outfielder has the same time (e.g. at kickoff) there's no meaningful "most
+    //   time", so no candidates.
+    // - Players tied with the Nth-highest time are all included - picking just some of a tie
+    //   would single out whoever happens to come first in the list.
+    // Compared in whole seconds, as displayed, so millisecond differences don't count.
     function computeSubCandidates(now) {
       const benchAvailableCount = Object.values(session.players)
         .filter((p) => p.status === 'bench' && !p.unavailable).length;
       if (benchAvailableCount === 0) return new Set();
       const fieldTimes = Object.entries(session.players)
-        .filter(([, p]) => p.status === 'field')
+        .filter(([, p]) => p.status === 'field' && !p.isGoalie)
         .map(([id, p]) => ({
           id,
           time: Math.floor(getElapsedField(p, now, session.live) - getElapsedGoalie(p, now, session.live)),
-        }));
-      if (fieldTimes.every((x) => x.time === fieldTimes[0].time)) return new Set();
-      const ranked = fieldTimes
-        .sort((a, b) => b.time - a.time)
-        .slice(0, benchAvailableCount)
-        .map((x) => x.id);
-      return new Set(ranked);
+        }))
+        .sort((a, b) => b.time - a.time);
+      if (fieldTimes.length === 0 || fieldTimes[0].time === fieldTimes[fieldTimes.length - 1].time) return new Set();
+      const cutoff = fieldTimes[Math.min(benchAvailableCount, fieldTimes.length) - 1].time;
+      return new Set(fieldTimes.filter((x) => x.time >= cutoff).map((x) => x.id));
     }
 
     function createTokenEl(pid, p, isField, needsSub) {
@@ -1107,17 +1578,18 @@ const Screens = {
     }
     document.addEventListener('click', closeSettingsOnOutsideClick);
 
-    App.root.querySelector('#end-game-btn').addEventListener('click', () => {
-      if (!confirm('End this game? The current session will be cleared.')) return;
+    App.root.querySelector('#end-game-btn').addEventListener('click', async () => {
+      if (!await showConfirm('End this game? It will be saved to the season history.', 'End game', true)) return;
       finishGame();
     });
 
     App.root.querySelector('#help-btn').addEventListener('click', () => showHelpMenu());
 
-    App.root.querySelector('#fc-edit-btn').addEventListener('click', () => {
-      const val = prompt('Players on field, total including the goalie (3-15):', session.fieldCount);
-      if (val === null) return;
-      const n = clamp(parseInt(val, 10) || session.fieldCount, 3, 15);
+    App.root.querySelector('#fc-edit-btn').addEventListener('click', async () => {
+      const n = await showNumberPrompt('Players on field', {
+        hint: 'Total, including the goalie (e.g. 7v7 \u2192 7)', value: session.fieldCount, min: 3, max: 15,
+      });
+      if (n === null || n === session.fieldCount) return;
       session.fieldCount = n;
       DB.saveTeamSettings(team.id, { fieldCount: n });
       DB.saveSession(session);
@@ -1204,7 +1676,7 @@ const Screens = {
       const modal = App.root.querySelector('#late-modal');
       if (availableIds.length === 0) {
         modal.hidden = true;
-        alert("Everyone on the roster is already in today's game.");
+        showToast("Everyone on the roster is already in today's game");
         return;
       }
       modal.hidden = false;
@@ -1564,6 +2036,7 @@ const Screens = {
     }
 
     App.root.querySelector('#goal-btn').addEventListener('click', () => { openGoalFlow(); });
+    if (preKickoff) App.root.querySelector('#cancel-setup-btn').addEventListener('click', cancelSetup);
 
     renderScoreboard();
     rerender();
@@ -1575,6 +2048,7 @@ const Screens = {
     if (!(history.state && history.state.gameGuard)) history.pushState({ gameGuard: true }, '', '#/game');
     function onPopState() {
       if (location.hash !== '#/game' || !DB.loadSession()) return;
+      if (preKickoff) { cancelSetup(); return; }
       history.pushState({ gameGuard: true }, '', '#/game');
       showToast('Game in progress - use the ⋯ menu > End game to leave');
     }

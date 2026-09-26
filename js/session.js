@@ -235,6 +235,15 @@ function editGoal(session, goalId, { scorerId, assistIds }) {
   goal.assistIds = (assistIds || []).slice(0, 2);
 }
 
+// A game's score, derived from its goal list - what an edited past game saves as its
+// finalScore, so the score and the season's goal/assist leaderboard can never disagree.
+function scoreFromGoals(goals) {
+  return {
+    us: (goals || []).filter((g) => g.team === 'us').length,
+    opponent: (goals || []).filter((g) => g.team === 'opponent').length,
+  };
+}
+
 // Shapes the finished-game summary appended to the team's season history when the coach ends
 // the game (see DB.appendGame) - the session itself is discarded right after.
 function buildGameRecord(session) {

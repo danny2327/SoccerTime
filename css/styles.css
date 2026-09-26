@@ -56,6 +56,8 @@ button, input {
 
 .icon { flex-shrink: 0; vertical-align: middle; }
 
+button.back-link { background: none; border: none; padding: 0; flex-shrink: 0; }
+
 .back-link {
   display: inline-flex;
   align-items: center;
@@ -316,6 +318,13 @@ button, input {
 
 /* ---------- Game screen ---------- */
 
+/* Any header carrying a ... menu (game screen, team home) - the menu layer hangs off its bottom. */
+.topbar.has-menu {
+  flex-wrap: nowrap;
+  position: relative;
+  z-index: 450;
+}
+
 .game-header {
   flex-wrap: nowrap;
   gap: 8px;
@@ -399,6 +408,7 @@ button, input {
   border: none;
   font-size: 15px;
   font-weight: 500;
+  text-decoration: none;
 }
 
 .settings-item .icon { color: #3a4a30; }
@@ -884,6 +894,17 @@ button, input {
   flex: 1;
 }
 
+/* A destructive confirm (delete, end game) - a solid red counterpart to .primary-btn. */
+.confirm-actions .danger-btn {
+  background: var(--danger);
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
 .toast {
   position: fixed;
   left: 50%;
@@ -911,6 +932,18 @@ button, input {
 /* --- Help walkthrough (modal card + pre-game floating button) --- */
 
 .help-card { max-width: 480px; }
+
+/* The guide scrolls, so its title row (with the close X) stays pinned at the top of the card. */
+.modal-card.help-card { padding-top: 0; }
+
+.help-card-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0 -16px 12px;
+  padding: max(16px, env(safe-area-inset-top)) 16px 8px;
+  background: var(--bg);
+}
 
 .help-section { margin: 0 0 16px; }
 .help-section:last-of-type { margin-bottom: 18px; }
@@ -1294,3 +1327,206 @@ button, input {
   color: #6b7462;
   margin: 28px 0 0;
 }
+
+/* --- Season: tappable game rows + Edit Game screen --- */
+
+.season-game-row { padding: 0; }
+
+.season-game-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  min-height: 52px;
+  padding: 5px 10px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.season-game-chevron { display: inline-flex; color: #8a9382; }
+
+.edit-score {
+  display: flex;
+  justify-content: center;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 14px 0 4px;
+  padding: 12px;
+  background: var(--green-dark);
+  color: #fff;
+  border-radius: 10px;
+}
+
+.edit-score-value { font-size: 26px; font-weight: 800; font-variant-numeric: tabular-nums; }
+
+.edit-goals-empty { list-style: none; margin: 6px 0; }
+
+.edit-game-actions { margin-top: 20px; }
+
+.goal-edit-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.goal-edit-label { font-size: 14px; font-weight: 700; margin: 0 0 6px; }
+.goal-edit-field .goal-edit-label { margin: 0; }
+
+.goal-edit-select {
+  flex: 1;
+  min-width: 0;
+  max-width: 260px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  font-size: 15px;
+}
+
+.goal-edit-assists { margin-bottom: 14px; }
+
+.segmented { display: flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+
+.segmented-btn {
+  min-width: 56px;
+  min-height: 40px;
+  border: none;
+  background: #fff;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.segmented-btn + .segmented-btn { border-left: 1px solid var(--line); }
+.segmented-btn.selected { background: var(--green); color: #fff; }
+
+/* --- Team home: settings summary line, who's-here count, roster Done --- */
+
+.settings-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  margin-bottom: 8px;
+  padding: 0 14px;
+  background: #e6efe3;
+  color: var(--green-dark);
+  border: none;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.settings-summary span:first-of-type { flex: 1; }
+.settings-summary-edit { color: var(--green); font-weight: 700; font-size: 13px; }
+.settings-summary:active { background: #d9e6d4; }
+
+.section-label-row { display: flex; justify-content: space-between; align-items: baseline; }
+.section-count { text-transform: none; letter-spacing: 0; font-weight: 600; }
+
+.roster-done-btn { display: block; text-align: center; text-decoration: none; box-sizing: border-box; }
+
+/* --- In-app text / number prompts (showTextPrompt, showNumberPrompt) --- */
+
+.prompt-card h2 { margin-bottom: 12px; }
+
+.prompt-input {
+  width: 100%;
+  padding: 12px;
+  margin-bottom: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 16px;
+  background: #fff;
+}
+
+.prompt-hint { margin: -6px 0 14px; }
+
+.prompt-stepper { justify-content: center; gap: 28px; margin: 6px 0 20px; }
+.prompt-stepper .stepper-btn { width: 48px; height: 48px; font-size: 24px; }
+.prompt-stepper .stepper-value { font-size: 30px; min-width: 44px; }
+.stepper-btn:disabled { opacity: 0.35; }
+
+/* --- Teams screen: big colored team cards, New Team + demo pinned to the bottom --- */
+
+.teams-page { display: flex; flex-direction: column; }
+.teams-page .team-list { gap: 12px; }
+
+.team-card {
+  display: flex;
+  align-items: stretch;
+  border-radius: 16px;
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+  overflow: hidden;
+}
+
+.team-card-link {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  min-height: 96px;
+  padding: 16px 18px;
+  color: #fff;
+  text-decoration: none;
+}
+
+.team-card-link:active { background: rgba(0,0,0,0.12); }
+
+.team-card-name {
+  font-size: 24px;
+  font-weight: 800;
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.team-card-meta { font-size: 14px; opacity: 0.9; }
+
+.team-card-menu {
+  width: 52px;
+  background: none;
+  border: none;
+  color: #fff;
+  font-size: 24px;
+}
+
+.team-card-menu:active { background: rgba(0,0,0,0.15); }
+
+.teams-bottom {
+  margin-top: auto;
+  padding-top: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.teams-bottom .primary-btn { display: flex; align-items: center; justify-content: center; gap: 8px; }
+.demo-team-btn { width: 100%; min-height: 44px; }
+.teams-bottom .app-version-footer { margin-top: 8px; }
+
+.color-swatches { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; }
+
+.color-swatch {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 3px solid transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.color-swatch.selected { border-color: #fff; box-shadow: 0 0 0 2px var(--ink); }
+
+.team-settings-color-label { margin-top: 14px; }

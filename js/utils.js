@@ -41,7 +41,8 @@ function sortedRoster(players) {
 // unreliable mid-gesture on mobile browsers - some auto-suppress repeated dialogs after just a
 // couple of uses ("Prevent this page from creating additional dialogs"), silently resolving to
 // "cancelled" from then on with no visible box at all. This always renders the same way.
-function showConfirm(message, confirmLabel) {
+// Pass danger=true for destructive actions (delete, end game) - the confirm button goes red.
+function showConfirm(message, confirmLabel, danger) {
   return new Promise((resolve) => {
     const modal = document.createElement('div');
     modal.className = 'modal';
@@ -50,7 +51,7 @@ function showConfirm(message, confirmLabel) {
         <p class="confirm-message"></p>
         <div class="confirm-actions">
           <button class="secondary-btn" id="confirm-no" type="button">Cancel</button>
-          <button class="primary-btn" id="confirm-yes" type="button"></button>
+          <button class="${danger ? 'danger-btn' : 'primary-btn'}" id="confirm-yes" type="button"></button>
         </div>
       </div>
     `;
@@ -65,6 +66,101 @@ function showConfirm(message, confirmLabel) {
     modal.querySelector('#confirm-yes').addEventListener('click', () => finish(true));
     modal.querySelector('#confirm-no').addEventListener('click', () => finish(false));
     modal.addEventListener('click', (e) => { if (e.target === modal) finish(false); });
+  });
+}
+
+// In-app replacement for window.prompt() for a line of text - same card as showConfirm. Resolves
+// to the trimmed text, or null if cancelled (an empty entry counts as cancelled).
+function showTextPrompt(title, opts) {
+  const o = opts || {};
+  return new Promise((resolve) => {
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.innerHTML = `
+      <form class="modal-card prompt-card">
+        <h2></h2>
+        <input type="text" class="prompt-input" maxlength="60">
+        <div class="confirm-actions">
+          <button class="secondary-btn" id="prompt-no" type="button">Cancel</button>
+          <button class="primary-btn" id="prompt-yes" type="submit"></button>
+        </div>
+      </form>
+    `;
+    modal.querySelector('h2').textContent = title;
+    const input = modal.querySelector('.prompt-input');
+    input.value = o.value || '';
+    input.placeholder = o.placeholder || '';
+    const yes = modal.querySelector('#prompt-yes');
+    yes.textContent = o.confirmLabel || 'OK';
+    const sync = () => { yes.disabled = !input.value.trim(); };
+    input.addEventListener('input', sync);
+    sync();
+    document.body.appendChild(modal);
+    input.focus();
+
+    function finish(result) {
+      modal.remove();
+      resolve(result);
+    }
+    modal.querySelector('form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (input.value.trim()) finish(input.value.trim());
+    });
+    modal.querySelector('#prompt-no').addEventListener('click', () => finish(null));
+    modal.addEventListener('click', (e) => { if (e.target === modal) finish(null); });
+  });
+}
+
+// In-app replacement for window.prompt() for a number within a range - a -/+ stepper, so there's
+// no keyboard and nothing out of range can be entered. Resolves to the number, or null if cancelled.
+function showNumberPrompt(title, opts) {
+  const o = opts || {};
+  const min = o.min != null ? o.min : 0;
+  const max = o.max != null ? o.max : 99;
+  const step = o.step || 1;
+  let value = clamp(o.value != null ? o.value : min, min, max);
+  return new Promise((resolve) => {
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.innerHTML = `
+      <div class="modal-card prompt-card">
+        <h2></h2>
+        <p class="panel-hint prompt-hint"></p>
+        <div class="stepper prompt-stepper">
+          <button class="stepper-btn" id="num-minus" type="button" aria-label="Decrease">&minus;</button>
+          <span class="stepper-value" id="num-value"></span>
+          <button class="stepper-btn" id="num-plus" type="button" aria-label="Increase">+</button>
+        </div>
+        <div class="confirm-actions">
+          <button class="secondary-btn" id="num-no" type="button">Cancel</button>
+          <button class="primary-btn" id="num-yes" type="button"></button>
+        </div>
+      </div>
+    `;
+    modal.querySelector('h2').textContent = title;
+    const hint = modal.querySelector('.prompt-hint');
+    if (o.hint) hint.textContent = o.hint; else hint.remove();
+    modal.querySelector('#num-yes').textContent = o.confirmLabel || 'Save';
+    const valueEl = modal.querySelector('#num-value');
+    const minus = modal.querySelector('#num-minus');
+    const plus = modal.querySelector('#num-plus');
+    const draw = () => {
+      valueEl.textContent = value;
+      minus.disabled = value <= min;
+      plus.disabled = value >= max;
+    };
+    minus.addEventListener('click', () => { value = clamp(value - step, min, max); draw(); });
+    plus.addEventListener('click', () => { value = clamp(value + step, min, max); draw(); });
+    draw();
+    document.body.appendChild(modal);
+
+    function finish(result) {
+      modal.remove();
+      resolve(result);
+    }
+    modal.querySelector('#num-yes').addEventListener('click', () => finish(value));
+    modal.querySelector('#num-no').addEventListener('click', () => finish(null));
+    modal.addEventListener('click', (e) => { if (e.target === modal) finish(null); });
   });
 }
 
@@ -85,6 +181,7 @@ const ICON_PATHS = {
   chevron: '<path d="M9 6l6 6-6 6"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
+  trash: '<path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/>',
 };
 
 function icon(name, size) {
@@ -105,7 +202,10 @@ function showGuide() {
   modal.className = 'modal';
   modal.innerHTML = `
     <div class="modal-card help-card">
-      <h2>How to Use SoccerTime</h2>
+      <div class="panel-header help-card-header">
+        <h2>How to Use SoccerTime</h2>
+        <button class="panel-close-btn" id="help-close" type="button" aria-label="Close">${icon('close', 20)}</button>
+      </div>
       <div class="help-section">
         <h3>Field &amp; bench</h3>
         <p>Drag a bench player onto the field to bring them on, or drag a field player off the field to bench them. Drag a player onto the goal to make them goalie. Drag one field player onto another to swap their positions.</p>
@@ -119,7 +219,7 @@ function showGuide() {
         <div class="help-legend">
           <div class="help-legend-item">
             <div class="help-legend-token token-needs-sub"><div class="token-circle-wrap"><div class="token-circle">9</div></div></div>
-            <p>Orange ring - this player has the most time on the field (time spent as goalie doesn't count) and is due for a sub next. The number of players highlighted always matches how many are free on the bench.</p>
+            <p>Orange ring - this player has the most time on the field (time spent as goalie doesn't count) and is due for a sub next. It highlights as many players as are free on the bench (more if several are tied), and none while everyone has played the same amount.</p>
           </div>
           <div class="help-legend-item">
             <div class="help-legend-token"><div class="token-circle-wrap"><div class="token-circle">4</div><span class="sub-badge">&#8646;</span></div></div>
@@ -135,7 +235,6 @@ function showGuide() {
         <h3>Players &amp; the menu</h3>
         <p>Players shows everyone's time on the field and by position, plus the goal log. Tap a player there to mark them out (hurt or unavailable) or remove them. The &#8943; menu adjusts the clock (say, if kickoff started early), changes how many are on the field, or adds someone who arrives late.</p>
       </div>
-      <button class="primary-btn big" id="help-close" type="button">Got it</button>
     </div>
   `;
   document.body.appendChild(modal);
