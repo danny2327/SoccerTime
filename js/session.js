@@ -164,7 +164,7 @@ function buildInitialRows(ids) {
 // goalie rather than an over-the-cap 8th outfield player. If there aren't enough present
 // players to fill the format, whatever's short just means kickoff stays blocked until the
 // coach adds more people or lowers the field count - no different than after that point.
-function startSession(team, presentIds, fieldCount, halfLengthMinutes, opponentName) {
+function startSession(team, presentIds, fieldCount, halfLengthMinutes, opponentName, opponentColor) {
   const now = Date.now();
   const outfieldIds = presentIds.slice(0, Math.max(0, fieldCount - 1));
   const goalieId = presentIds.length >= fieldCount ? presentIds[fieldCount - 1] : null;
@@ -196,7 +196,8 @@ function startSession(team, presentIds, fieldCount, halfLengthMinutes, opponentN
   const session = {
     teamId: team.id, fieldCount, halfLengthMinutes, startedAt: now, players, rows,
     live: false, kickoffAt: null, half: 1, halfStartedAt: null,
-    opponentName: (opponentName || '').trim(), score: { us: 0, opponent: 0 }, goals: [],
+    opponentName: (opponentName || '').trim(), opponentColor: opponentColor || null,
+    score: { us: 0, opponent: 0 }, goals: [],
     subQueue: [],
   };
   DB.saveSession(session);
@@ -252,6 +253,7 @@ function buildGameRecord(session) {
     date: session.kickoffAt || session.startedAt,
     endedAt: Date.now(),
     opponentName: session.opponentName || '',
+    opponentColor: session.opponentColor || null,
     finalScore: session.score || { us: 0, opponent: 0 },
     goals: session.goals || [],
     fieldCount: session.fieldCount,

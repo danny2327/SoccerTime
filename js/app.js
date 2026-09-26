@@ -16,6 +16,10 @@ const App = {
   route() {
     if (this._tick) { clearInterval(this._tick); this._tick = null; }
     if (this._cleanup) { this._cleanup(); this._cleanup = null; }
+    // Sheets opened with document.body.appendChild (confirms, prompts, help, colour pickers) live
+    // outside App.root, so a screen change - e.g. the phone's back button while one is open -
+    // wouldn't clear them. Drop any leftovers so they can't sit over the next screen.
+    document.querySelectorAll('body > .modal').forEach((m) => m.remove());
 
     const hash = location.hash.slice(1) || '/teams';
     const parts = hash.split('/').filter(Boolean);
@@ -75,9 +79,29 @@ const App = {
   },
 };
 
-// Team card colors - all dark enough to keep white text readable. A team without a color yet
-// (created before colors existed) shows the first one, the app's own green.
-const TEAM_COLORS = ['#1b5e20', '#1f5fa8', '#b3261e', '#6a3fa0', '#0f766e', '#a84a0c', '#1e3a5f', '#7f1d3f', '#333a2e'];
+// Team colours. Most are dark enough for white text; the light ones (yellow, white - for teams
+// in those jerseys) get dark text instead, via textOn/colorStyle below. Light colours sit at the
+// end so new teams and opponent defaults still start on the dark ones. A team without a colour
+// yet (created before colours existed) shows the first one, the app's own green.
+const TEAM_COLORS = ['#1b5e20', '#1f5fa8', '#b3261e', '#6a3fa0', '#0f766e', '#a84a0c', '#1e3a5f', '#7f1d3f', '#333a2e', '#f5c400', '#ffffff'];
+
+// True for colours light enough that white text on them would be hard to read.
+function isLightColor(hex) {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex || '');
+  if (!m) return false;
+  const n = parseInt(m[1], 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return (0.299 * r + 0.587 * g + 0.114 * b) > 170;
+}
+
+function textOn(hex) {
+  return isLightColor(hex) ? '#16210f' : '#fff';
+}
+
+// Inline style for anything filled with a team colour and carrying text on top.
+function colorStyle(hex) {
+  return `background:${hex};color:${textOn(hex)}`;
+}
 
 function teamColor(team) {
   return TEAM_COLORS.includes(team.color) ? team.color : TEAM_COLORS[0];
@@ -87,6 +111,12 @@ function teamColor(team) {
 function nextTeamColor(teams) {
   const used = new Set(teams.map(teamColor));
   return TEAM_COLORS.find((c) => !used.has(c)) || TEAM_COLORS[teams.length % TEAM_COLORS.length];
+}
+
+// The opponent's default colour: the first one that isn't the coach's own team colour, so the
+// two sides never start out looking the same.
+function defaultOpponentColor(team) {
+  return TEAM_COLORS.find((c) => c !== teamColor(team));
 }
 
 function setTeamColor(teamId, color) {
@@ -102,9 +132,9 @@ function renderColorSwatches(container, selected, onPick) {
   let current = selected;
   const draw = () => {
     container.innerHTML = TEAM_COLORS.map((c) => `
-      <button type="button" class="color-swatch ${c === current ? 'selected' : ''}" data-color="${c}"
-        style="background:${c}" aria-label="Colour ${c}" aria-pressed="${c === current}">
-        ${c === current ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>' : ''}
+      <button type="button" class="color-swatch ${c === current ? 'selected' : ''} ${isLightColor(c) ? 'light' : ''}" data-color="${c}"
+        style="${colorStyle(c)}" aria-label="Colour ${c}" aria-pressed="${c === current}">
+        ${c === current ? `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="${textOn(c)}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>` : ''}
       </button>`).join('');
     container.querySelectorAll('[data-color]').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -177,7 +207,7 @@ const Screens = {
               else d++;
             });
             return `
-              <li class="team-card" style="background:${teamColor(t)}">
+              <li class="team-card" style="${colorStyle(teamColor(t))}">
                 <a href="#/team/${t.id}" class="team-card-link">
                   <span class="team-card-name">${escapeHtml(t.name)}</span>
                   <span class="team-card-meta">
@@ -420,7 +450,7 @@ const Screens = {
                   <a href="#/season/${team.id}/game/${g.id}" class="season-game-link" aria-label="Edit game vs ${escapeHtml(g.opponentName || 'Opponent')}">
                     <span class="result-badge result-${result}">${result}</span>
                     <span class="season-game-info">
-                      <span class="season-game-opponent">${escapeHtml(g.opponentName || 'Opponent')}</span>
+                      <span class="season-game-opponent">${g.opponentColor ? `<span class="team-dot" style="${colorStyle(g.opponentColor)}"></span>` : ''}${escapeHtml(g.opponentName || 'Opponent')}</span>
                       <span class="panel-hint">${g.date ? new Date(g.date).toLocaleDateString() : 'No date'}</span>
                     </span>
                     <span class="season-game-score">${g.finalScore.us}&ndash;${g.finalScore.opponent}</span>
@@ -483,9 +513,12 @@ const Screens = {
           <label for="eg-date">Date</label>
           <input type="date" id="eg-date" class="opponent-input" value="${toDateInput(draft.date)}">
         </section>
-        <section class="field-count-picker">
-          <label for="eg-opponent">Opponent</label>
-          <input type="text" id="eg-opponent" class="opponent-input" placeholder="Opponent name" value="${escapeHtml(draft.opponentName || '')}">
+        <section class="opponent-card">
+          <div class="opponent-row">
+            <label for="eg-opponent">Opponent</label>
+            <input type="text" id="eg-opponent" class="opponent-input" placeholder="Opponent name" value="${escapeHtml(draft.opponentName || '')}">
+          </div>
+          <div class="color-swatches compact" id="eg-opponent-colors" aria-label="Opponent colour"></div>
         </section>
         <div class="edit-score" id="eg-score"></div>
         <h2 class="section-label">${escapeHtml(team.name)} goals</h2>
@@ -515,9 +548,9 @@ const Screens = {
       const score = scoreFromGoals(draft.goals);
       const opp = App.root.querySelector('#eg-opponent').value.trim() || 'Opponent';
       App.root.querySelector('#eg-score').innerHTML = `
-        <span class="score-team-name">${escapeHtml(team.name)}</span>
+        <span class="score-team-name team-pill" style="${colorStyle(teamColor(team))}">${escapeHtml(team.name)}</span>
         <span class="edit-score-value">${score.us} &ndash; ${score.opponent}</span>
-        <span class="score-team-name">${escapeHtml(opp)}</span>`;
+        <span class="score-team-name team-pill" style="${colorStyle(draft.opponentColor || 'transparent')}">${escapeHtml(opp)}</span>`;
       App.root.querySelector('#eg-opp-value').textContent = score.opponent;
 
       const ours = draft.goals.filter((g) => g.team === 'us');
@@ -642,6 +675,10 @@ const Screens = {
     goalModal.addEventListener('click', (e) => { if (e.target === goalModal) { goalModal.hidden = true; goalModal.innerHTML = ''; } });
 
     App.root.querySelector('#eg-add-goal').addEventListener('click', () => openGoalEditor(null));
+    renderColorSwatches(App.root.querySelector('#eg-opponent-colors'), draft.opponentColor || null, (color) => {
+      draft.opponentColor = color;
+      render();
+    });
     App.root.querySelector('#eg-opponent').addEventListener('input', () => render());
 
     App.root.querySelector('#eg-opp-plus').addEventListener('click', () => {
@@ -703,10 +740,12 @@ const Screens = {
     // player, changing settings) so nothing the coach already entered gets reset.
     const absentIds = new Set();
     let opponentName = '';
+    let opponentColor = null; // null until picked - falls back to defaultOpponentColor
     const returned = App._returnState && App._returnState.teamId === teamId ? App._returnState : null;
     App._returnState = null;
     if (returned) {
       opponentName = returned.opponentName;
+      opponentColor = returned.opponentColor || null;
       team.players.forEach((p) => { if (!returned.presentIds.includes(p.id)) absentIds.add(p.id); });
     }
     let addFormOpen = team.players.length === 0;
@@ -742,9 +781,12 @@ const Screens = {
             ${icon('field')} <span>${fieldCount} on field &middot; ${halfLength} min halves</span>
             <span class="settings-summary-edit">Change</span>
           </button>
-          <section class="field-count-picker">
-            <label for="opponent-name">Opponent<span class="field-count-sublabel">Optional - shown on the scoreboard</span></label>
-            <input type="text" id="opponent-name" class="opponent-input" placeholder="Opponent name" value="${escapeHtml(opponentName)}">
+          <section class="opponent-card">
+            <div class="opponent-row">
+              <label for="opponent-name">Opponent<span class="field-count-sublabel">Optional - shown on the scoreboard</span></label>
+              <input type="text" id="opponent-name" class="opponent-input" placeholder="Opponent name" value="${escapeHtml(opponentName)}">
+            </div>
+            <div class="color-swatches compact" id="opponent-colors" aria-label="Opponent colour"></div>
           </section>
           <h2 class="section-label section-label-row">
             <span>Who's here today?</span>
@@ -793,6 +835,9 @@ const Screens = {
 
       // --- Who's here ---
       App.root.querySelector('#opponent-name').addEventListener('input', (e) => { opponentName = e.target.value; });
+      renderColorSwatches(App.root.querySelector('#opponent-colors'), opponentColor || defaultOpponentColor(team), (color) => {
+        opponentColor = color;
+      });
       App.root.querySelectorAll('.present-check').forEach((c) => {
         c.addEventListener('change', () => {
           if (c.checked) absentIds.delete(c.value); else absentIds.add(c.value);
@@ -823,7 +868,7 @@ const Screens = {
       App.root.querySelector('#begin-btn').addEventListener('click', () => {
         const presentIds = sorted.filter((p) => !absentIds.has(p.id)).map((p) => p.id);
         if (presentIds.length === 0) return;
-        startSession(team, presentIds, fieldCount, halfLength, opponentName.trim());
+        startSession(team, presentIds, fieldCount, halfLength, opponentName.trim(), opponentColor || defaultOpponentColor(team));
         location.hash = '#/game';
       });
     }
@@ -948,6 +993,7 @@ const Screens = {
       App._returnState = {
         teamId: team.id,
         opponentName: session.opponentName || '',
+        opponentColor: session.opponentColor || null,
         presentIds: Object.keys(session.players),
       };
       DB.saveSession(null);
@@ -1030,11 +1076,11 @@ const Screens = {
 
     function renderScoreboard() {
       scoreboard.innerHTML = `
-        <span class="score-team-name">${escapeHtml(team.name)}</span>
+        <span class="score-team-name team-pill" style="${colorStyle(teamColor(team))}">${escapeHtml(team.name)}</span>
         <span class="score-value">${session.score.us}</span>
         <span class="score-sep">&ndash;</span>
         <span class="score-value">${session.score.opponent}</span>
-        <span class="score-team-name">${escapeHtml(session.opponentName || 'Opponent')}</span>
+        <span class="score-team-name team-pill" style="${colorStyle(session.opponentColor || defaultOpponentColor(team))}">${escapeHtml(session.opponentName || 'Opponent')}</span>
       `;
     }
 
@@ -1068,8 +1114,17 @@ const Screens = {
       // at a glance when the on-field position swaps aren't mixed in between them. Array#sort is
       // stable, so relative order within each group is otherwise untouched.
       const ordered = [...queue].sort((a, b) => Number(isSwapPair(a)) - Number(isSwapPair(b)));
+      // Big "coming off" callout - just the players actually leaving the field (swaps don't count),
+      // as number + first name, for the coach to read out at a glance and shout across the field.
+      const shortLabel = (rp) => (rp ? `#${rp.number || '?'} ${rp.name.split(/\s+/)[0]}` : '(removed)');
+      const comingOff = ordered.filter((pair) => !isSwapPair(pair)).map((pair) => shortLabel(rosterById[pair.offId]));
       subQueueContainer.innerHTML = `
         <div class="sub-queue-bar">
+          ${comingOff.length ? `
+            <div class="coming-off">
+              <span class="coming-off-label">Coming off</span>
+              <span class="coming-off-names">${comingOff.map((n) => `<span class="coming-off-name">${escapeHtml(n)}</span>`).join('')}</span>
+            </div>` : ''}
           <div class="sub-queue-chips">
             ${ordered.map((pair) => {
               const off = rosterById[pair.offId];
@@ -1920,8 +1975,8 @@ const Screens = {
           <div class="modal-card">
             <h2>Who scored?</h2>
             <div class="goal-team-picker">
-              <button class="primary-btn big" data-team="us" type="button">${escapeHtml(team.name)}</button>
-              <button class="primary-btn big" data-team="opponent" type="button">${escapeHtml(session.opponentName || 'Opponent')}</button>
+              <button class="primary-btn big goal-team-btn" data-team="us" type="button" style="${colorStyle(teamColor(team))}">${escapeHtml(team.name)}</button>
+              <button class="primary-btn big goal-team-btn" data-team="opponent" type="button" style="${colorStyle(session.opponentColor || defaultOpponentColor(team))}">${escapeHtml(session.opponentName || 'Opponent')}</button>
               <button class="secondary-btn" id="goal-team-cancel" type="button">Cancel</button>
             </div>
           </div>
