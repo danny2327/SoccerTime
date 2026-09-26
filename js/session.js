@@ -250,9 +250,10 @@ function buildGameRecord(session) {
   };
 }
 
-// Queues a substitution (bench player onId coming on for field player offId) instead of making
-// it immediately - lets the coach prepare several subs ahead of a stoppage and fire them all at
-// once with applySubQueue. Refuses to double-book either player into a second pending pair.
+// Queues either a substitution (bench player onId coming on for field player offId) or, if both
+// are currently on the field, a position swap between them - instead of making it immediately.
+// Lets the coach prepare several changes ahead of a stoppage and fire them all at once with
+// applySubQueue. Refuses to double-book either player into a second pending pair.
 function queueSub(session, offId, onId) {
   if (!session.subQueue) session.subQueue = [];
   const alreadyQueued = session.subQueue.some((p) => (
@@ -268,15 +269,25 @@ function unqueueSub(session, pairId) {
   session.subQueue = (session.subQueue || []).filter((p) => p.id !== pairId);
 }
 
-// Executes every queued pair at once (same steps the 1-for-1 drag substitution already performs
-// in app.js), then clears the queue. Re-checks each pair's players are still in the statuses they
-// were in when queued - a drag elsewhere could have moved either of them in the meantime - and
-// silently skips any pair that's no longer valid rather than leaving the field in a broken state.
+// Executes every queued pair at once (same steps the drag-based substitution/swap already
+// perform in app.js), then clears the queue. Re-checks each pair's players are still in the
+// statuses they were in when queued - a drag elsewhere could have moved either of them in the
+// meantime - and silently skips any pair that's no longer valid rather than leaving the field in
+// a broken state.
 function applySubQueue(session, now) {
   (session.subQueue || []).forEach(({ offId, onId }) => {
     const offP = session.players[offId];
     const onP = session.players[onId];
     if (!offP || !onP) return;
+    if (offP.status === 'field' && onP.status === 'field') {
+      // Both already on the field - a position swap, not a sub. Goalie changes stay on the
+      // dedicated drag-to-goal flow, so skip a pair that's since had either side made goalie.
+      if (offP.isGoalie || onP.isGoalie) return;
+      FieldLayout.swapPlayers(session.rows, offId, onId);
+      setRow(session, offId, FieldLayout.rowIndexOf(session.rows, offId), now);
+      setRow(session, onId, FieldLayout.rowIndexOf(session.rows, onId), now);
+      return;
+    }
     if (offP.status !== 'field' || onP.status !== 'bench') return;
     const targetRowIdx = FieldLayout.rowIndexOf(session.rows, offId);
     setStatus(session, offId, 'bench', now);

@@ -106,6 +106,8 @@ const Screens = {
         Screens.teamsList();
       });
     });
+
+    attachHelpFab();
   },
 
   // Hidden dev/testing route: visiting #/seed-demo (re)creates a 13-player "Dummy Team" so a
@@ -262,6 +264,8 @@ const Screens = {
       App.root.querySelector('#start-game-btn').addEventListener('click', () => {
         location.hash = `#/start/${team.id}`;
       });
+
+      attachHelpFab();
     };
 
     render();
@@ -414,6 +418,8 @@ const Screens = {
       startSession(team, presentIds, fieldCount, halfLength, opponentName);
       location.hash = '#/game';
     });
+
+    attachHelpFab();
   },
 
   gameSession() {
@@ -489,6 +495,7 @@ const Screens = {
         <button id="fc-edit-btn" class="settings-item" type="button">${session.fieldCount} on field &#9998;</button>
         <button id="add-late-btn" class="settings-item" type="button">+ Add Player</button>
         ${session.live ? '<button id="adjust-clock-btn" class="settings-item" type="button">&#8986; Adjust Clock</button>' : ''}
+        <button id="help-btn" class="settings-item" type="button">&#10067; Help</button>
         <div class="settings-item settings-version">${escapeHtml(APP_VERSION)}</div>
       </div>
       <div id="kickoff-container"></div>
@@ -502,7 +509,7 @@ const Screens = {
         </div>
         <div id="undo-banner" class="undo-banner" hidden></div>
         <div id="field-warning" class="field-warning" hidden></div>
-        <p class="field-hint">Drag a player onto the goal to make them goalie, or onto another player to swap/replace them. Drag off the field to bench them. Tap a bench player then a field player to queue a substitution for later.</p>
+        <p class="field-hint">Drag a player onto the goal to make them goalie, or onto another player to swap/replace them. Drag off the field to bench them. Tap two field players to queue a swap, or a bench and a field player to queue a substitution, for later.</p>
       </main>
       <div id="late-modal" class="modal" hidden></div>
       <div id="goal-modal" class="modal" hidden></div>
@@ -568,21 +575,29 @@ const Screens = {
     function renderSubQueue() {
       const queue = session.subQueue || [];
       if (queue.length === 0) { subQueueContainer.innerHTML = ''; return; }
+      const isSwapPair = (pair) => (session.players[pair.offId] || {}).status === 'field'
+        && (session.players[pair.onId] || {}).status === 'field';
+      // Subs first, swaps pushed to the bottom - easier to call out who's actually coming off/on
+      // at a glance when the on-field position swaps aren't mixed in between them. Array#sort is
+      // stable, so relative order within each group is otherwise untouched.
+      const ordered = [...queue].sort((a, b) => Number(isSwapPair(a)) - Number(isSwapPair(b)));
       subQueueContainer.innerHTML = `
         <div class="sub-queue-bar">
           <div class="sub-queue-chips">
-            ${queue.map((pair) => {
+            ${ordered.map((pair) => {
               const off = rosterById[pair.offId];
               const on = rosterById[pair.onId];
               const label = (rp) => rp ? `#${escapeHtml(rp.number || '?')} ${escapeHtml(rp.name)}` : '(removed)';
+              const isSwap = isSwapPair(pair);
+              const body = isSwap ? `${label(off)} &harr; ${label(on)}` : `${label(on)} &rarr; for ${label(off)}`;
               return `
-                <span class="sub-queue-chip">
-                  ${label(on)} &rarr; for ${label(off)}
+                <span class="sub-queue-chip${isSwap ? ' sub-queue-chip-swap' : ''}">
+                  ${body}
                   <button class="sub-queue-remove" data-unqueue="${pair.id}" type="button" aria-label="Remove">&times;</button>
                 </span>`;
             }).join('')}
           </div>
-          <button id="make-subs-btn" class="kickoff-bar sub-queue-execute" type="button">&#8646; Make ${queue.length} Sub${queue.length > 1 ? 's' : ''}</button>
+          <button id="make-subs-btn" class="kickoff-bar sub-queue-execute" type="button">&#8646; Apply ${queue.length} Change${queue.length > 1 ? 's' : ''}</button>
         </div>
       `;
       subQueueContainer.querySelectorAll('[data-unqueue]').forEach((btn) => {
@@ -632,17 +647,21 @@ const Screens = {
     // Which on-field players are "due" for a sub next: the N with the most outfield time
     // (goalie time excluded, same as outfieldTimeLabelFor), where N is however many available
     // (non-unavailable) players are waiting on the bench - that's how many could actually come
-    // on right now. No bench, no candidates.
+    // on right now. No bench, no candidates. If everyone on the field has the same time (e.g. at
+    // kickoff) there's no meaningful "most time", so no candidates either - compared in whole
+    // seconds, as displayed, so millisecond differences in when players went on don't count.
     function computeSubCandidates(now) {
       const benchAvailableCount = Object.values(session.players)
         .filter((p) => p.status === 'bench' && !p.unavailable).length;
       if (benchAvailableCount === 0) return new Set();
-      const ranked = Object.entries(session.players)
+      const fieldTimes = Object.entries(session.players)
         .filter(([, p]) => p.status === 'field')
         .map(([id, p]) => ({
           id,
-          time: getElapsedField(p, now, session.live) - getElapsedGoalie(p, now, session.live),
-        }))
+          time: Math.floor(getElapsedField(p, now, session.live) - getElapsedGoalie(p, now, session.live)),
+        }));
+      if (fieldTimes.every((x) => x.time === fieldTimes[0].time)) return new Set();
+      const ranked = fieldTimes
         .sort((a, b) => b.time - a.time)
         .slice(0, benchAvailableCount)
         .map((x) => x.id);
@@ -652,10 +671,18 @@ const Screens = {
     function createTokenEl(pid, p, isField, needsSub) {
       const rp = rosterById[pid];
       const el = document.createElement('div');
-      const isQueued = (session.subQueue || []).some((pair) => pair.offId === pid || pair.onId === pid);
+      const queuedPair = (session.subQueue || []).find((pair) => pair.offId === pid || pair.onId === pid);
+      const isQueued = !!queuedPair;
+      // A queued pair where both sides are already on the field is a position swap, not a
+      // substitution - flagged green instead of the usual sub blue so it reads as a different
+      // kind of pending change at a glance.
+      const isSwapQueued = isQueued
+        && (session.players[queuedPair.offId] || {}).status === 'field'
+        && (session.players[queuedPair.onId] || {}).status === 'field';
       const classes = ['token', isField ? 'token-field' : 'token-bench'];
       if (pid === pendingSelectId) classes.push('token-pending-select');
       if (isQueued) classes.push('token-queued');
+      if (isSwapQueued) classes.push('token-swap-queued');
       if (isField && needsSub) classes.push('token-needs-sub');
       el.className = classes.join(' ');
       el.dataset.playerId = pid;
@@ -666,8 +693,7 @@ const Screens = {
         <div class="token-circle-wrap">
           <div class="token-circle ${number ? '' : 'no-number'} ${p.isGoalie ? 'is-goalie' : ''}">${escapeHtml(number || '?')}</div>
           ${p.isGoalie ? '<span class="goalie-badge">GK</span>' : ''}
-          ${isQueued ? '<span class="sub-badge">&#8646;</span>' : ''}
-          ${isField ? '<span class="sub-next-badge" title="Highest field time on the field - due for a sub">&#9203;</span>' : ''}
+          ${isQueued ? `<span class="sub-badge${isSwapQueued ? ' sub-badge-swap' : ''}">&#8646;</span>` : ''}
         </div>
         <div class="token-name">${escapeHtml(name)}</div>
         ${isField ? '' : '<div class="token-field-total"></div>'}
@@ -1037,8 +1063,8 @@ const Screens = {
       const otherP = session.players[otherId];
       pendingSelectId = null;
       if (!otherP) return;
-      if (otherP.status === p.status) {
-        showToast('Pick one bench player and one field player');
+      if (otherP.status === 'bench' && p.status === 'bench') {
+        showToast('Pick two field players to swap, or a bench and a field player to sub');
         return;
       }
       const offId = p.status === 'field' ? pid : otherId;
@@ -1065,6 +1091,8 @@ const Screens = {
       if (!confirm('End this game? The current session will be cleared.')) return;
       finishGame();
     });
+
+    App.root.querySelector('#help-btn').addEventListener('click', () => showHelp());
 
     App.root.querySelector('#fc-edit-btn').addEventListener('click', () => {
       const val = prompt('Players on field, total including the goalie (3-15):', session.fieldCount);
