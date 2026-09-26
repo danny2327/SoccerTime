@@ -103,7 +103,7 @@ function renderColorSwatches(container, selected, onPick) {
   const draw = () => {
     container.innerHTML = TEAM_COLORS.map((c) => `
       <button type="button" class="color-swatch ${c === current ? 'selected' : ''}" data-color="${c}"
-        style="background:${c}" aria-label="Color ${c}" aria-pressed="${c === current}">
+        style="background:${c}" aria-label="Colour ${c}" aria-pressed="${c === current}">
         ${c === current ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>' : ''}
       </button>`).join('');
     container.querySelectorAll('[data-color]').forEach((btn) => {
@@ -184,7 +184,7 @@ const Screens = {
                     ${t.players.length} player${t.players.length === 1 ? '' : 's'}${games.length ? ` &middot; ${w}-${d}-${l}` : ''}
                   </span>
                 </a>
-                <button class="team-card-menu" data-team-menu="${t.id}" type="button" aria-label="Color for ${escapeHtml(t.name)}">&#8942;</button>
+                <button class="team-card-menu" data-team-menu="${t.id}" type="button" aria-label="Colour for ${escapeHtml(t.name)}">&#8942;</button>
               </li>`;
           }).join('')}
         </ul>
@@ -222,7 +222,7 @@ const Screens = {
               <h2>${escapeHtml(t.name)}</h2>
               <button class="panel-close-btn" data-close type="button" aria-label="Close">${icon('close', 20)}</button>
             </div>
-            <h3 class="goal-edit-label">Team color</h3>
+            <h3 class="goal-edit-label">Team colour</h3>
             <div class="color-swatches"></div>
             <button class="primary-btn big" data-close type="button">Done</button>
           </div>
@@ -856,7 +856,7 @@ const Screens = {
               <button id="hl-plus" class="stepper-btn" type="button" aria-label="Longer halves">+</button>
             </div>
           </section>
-          <h3 class="goal-edit-label team-settings-color-label">Team color</h3>
+          <h3 class="goal-edit-label team-settings-color-label">Team colour</h3>
           <div class="color-swatches"></div>
           <button class="primary-btn big" data-close type="button">Done</button>
         </div>
@@ -1009,7 +1009,7 @@ const Screens = {
           </div>
           <section class="panel-section">
             <h3>Time by position</h3>
-            <p class="panel-hint">ST = striker · AM = attacking mid · DM = defensive mid · DEF = defense</p>
+            <p class="panel-hint">ST = striker · AM = attacking mid · DM = defensive mid · DEF = defence</p>
             <div id="info-panel-content"></div>
           </section>
           <section class="panel-section">
@@ -1096,9 +1096,13 @@ const Screens = {
         });
       });
       subQueueContainer.querySelector('#make-subs-btn').addEventListener('click', () => {
+        const count = queue.length;
+        const beforeState = JSON.parse(JSON.stringify({ players: session.players, rows: session.rows, subQueue: session.subQueue }));
         applySubQueue(session, Date.now());
         DB.saveSession(session);
-        reloadGameScreen();
+        rerender();
+        lastMove = beforeState;
+        showUndoBanner(`Applied ${count} change${count > 1 ? 's' : ''}`, undoLastMove);
       });
     }
 
@@ -1277,8 +1281,8 @@ const Screens = {
     // The token tapped first while building a queued substitution, awaiting its pair.
     let pendingSelectId = null;
     // A snapshot of players/rows from just before the last manual drag that actually changed
-    // something, offered back via the undo banner - deliberately not touched by tap-to-queue
-    // (handleTokenTap) or applySubQueue, since only manual drags should be undoable this way.
+    // something - or the last Apply of the sub queue (which also snapshots the queue itself, so
+    // undoing it puts the queued changes back) - offered back via the undo banner.
     let lastMove = null;
     let undoBannerTimer = null;
 
@@ -1286,6 +1290,7 @@ const Screens = {
       if (!lastMove) return;
       session.players = lastMove.players;
       session.rows = lastMove.rows;
+      if (lastMove.subQueue) session.subQueue = lastMove.subQueue;
       lastMove = null;
       DB.saveSession(session);
       hideUndoBanner();
@@ -1400,6 +1405,25 @@ const Screens = {
       endDrag();
     }
 
+    // The browser still fires a "click" after a token's pointerup, at the same spot - and by then
+    // the re-render may have moved something else under the finger. Queuing a sub adds the queue
+    // bar above the bench strip, which puts its Apply button right where a bench token was, so
+    // that stray click would apply the queue instantly. Swallow the one click that follows (or
+    // give up after a moment, if none does).
+    function swallowGhostClick() {
+      const block = (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        cleanup();
+      };
+      const cleanup = () => {
+        document.removeEventListener('click', block, true);
+        clearTimeout(timer);
+      };
+      document.addEventListener('click', block, true);
+      const timer = setTimeout(cleanup, 400);
+    }
+
     // Dropping a player onto the goal makes them goalie (bumping the previous one, with
     // confirmation). Cancelling snaps the dragged player back to exactly where they started
     // (see below). If the incoming goalie came from the bench, the old goalie goes to the
@@ -1450,6 +1474,7 @@ const Screens = {
       // Clear the drag visuals immediately - don't leave the ghost/highlight hanging around
       // while a goalie-replacement confirmation is up.
       endDrag();
+      swallowGhostClick();
 
       let undoOffer = null;
       const nameOf = (id) => (rosterById[id] || {}).name || 'that player';

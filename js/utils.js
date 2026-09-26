@@ -215,7 +215,7 @@ function showGuide() {
         <p>Tap a bench player then a field player to queue a substitution, or tap two field players to queue a position swap - handy for planning ahead of a stoppage. Tap either one again to un-queue it. Queued changes wait in a list until you tap Apply.</p>
       </div>
       <div class="help-section">
-        <h3>Badges &amp; colors</h3>
+        <h3>Badges &amp; colours</h3>
         <div class="help-legend">
           <div class="help-legend-item">
             <div class="help-legend-token token-needs-sub"><div class="token-circle-wrap"><div class="token-circle">9</div></div></div>
@@ -267,7 +267,7 @@ function showHelpMenu() {
         <span class="help-option-icon">${icon('book', 22)}</span>
         <span class="help-option-text">
           <span class="help-option-title">How to use SoccerTime</span>
-          <span class="help-option-sub">Moving players, queuing subs and swaps, and what the colors mean</span>
+          <span class="help-option-sub">Moving players, queuing subs and swaps, and what the colours mean</span>
         </span>
         ${icon('chevron', 16)}
       </button>
