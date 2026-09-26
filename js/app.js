@@ -20,6 +20,15 @@ const App = {
     const hash = location.hash.slice(1) || '/teams';
     const parts = hash.split('/').filter(Boolean);
 
+    // A game in progress always wins: relaunching the app, or backing out of the game screen,
+    // lands straight back in it rather than on a screen where starting a new game would
+    // overwrite it. Only End Game (which clears the session) leaves for good. Season history
+    // and the dev seed route stay reachable.
+    if (parts[0] !== 'game' && parts[0] !== 'season' && parts[0] !== 'seed-demo' && DB.loadSession()) {
+      history.replaceState(null, '', '#/game');
+      return Screens.gameSession();
+    }
+
     if (parts[0] === 'team' && parts[1]) return Screens.teamEdit(parts[1]);
     if (parts[0] === 'start' && parts[1]) return Screens.startGame(parts[1]);
     if (parts[0] === 'game') return Screens.gameSession();
@@ -68,6 +77,7 @@ const Screens = {
       <header class="topbar">
         <h1>My Teams</h1>
         <button id="install-btn" class="icon-btn" hidden title="Install app">Install</button>
+        ${helpButtonHtml()}
       </header>
       <main class="list-page">
         ${teams.length === 0 ? `<p class="empty">No teams yet. Add one to get started.</p>` : ''}
@@ -82,6 +92,7 @@ const Screens = {
             </li>`).join('')}
         </ul>
         <button id="new-team-btn" class="primary-btn big">+ New Team</button>
+        <p class="app-version-footer">SoccerTime ${escapeHtml(APP_VERSION)}</p>
       </main>
     `;
 
@@ -107,7 +118,7 @@ const Screens = {
       });
     });
 
-    attachHelpFab();
+    wireHelpButton();
   },
 
   // Hidden dev/testing route: visiting #/seed-demo (re)creates a 13-player "Dummy Team" so a
@@ -154,10 +165,10 @@ const Screens = {
       const sorted = sortedRoster(team.players);
       App.root.innerHTML = `
         <header class="topbar">
-          <a href="#/teams" class="back-link">&larr; Teams</a>
+          <a href="#/teams" class="back-link" aria-label="Back to teams">${icon('back', 22)}</a>
           <h1>${escapeHtml(team.name)}</h1>
-          <button id="add-player-toggle-btn" class="icon-btn" type="button">&#43; Player</button>
-          <a href="#/season/${team.id}" class="icon-btn">&#128197; Season</a>
+          <a href="#/season/${team.id}" class="icon-btn">${icon('calendar')} Season</a>
+          ${helpButtonHtml()}
         </header>
         <main class="list-page">
           <ul class="player-list" id="player-list">
@@ -169,6 +180,7 @@ const Screens = {
               </li>`).join('')}
           </ul>
           ${team.players.length === 0 ? '<p class="empty">Add your first player below.</p>' : ''}
+          <button id="add-player-toggle-btn" class="add-row-btn" type="button" ${addFormOpen ? 'hidden' : ''}>${icon('plus')} Add player</button>
           <form id="add-player-form" class="add-player-form" ${addFormOpen ? '' : 'hidden'}>
             <input type="text" id="new-number" placeholder="#" inputmode="numeric" pattern="[0-9]*" maxlength="3" class="number-input">
             <input type="text" id="new-name" placeholder="Player name" class="name-input" required>
@@ -179,11 +191,11 @@ const Screens = {
         <div id="player-modal" class="modal" hidden></div>
       `;
 
-      App.root.querySelector('#add-player-toggle-btn').addEventListener('click', () => {
-        addFormOpen = !addFormOpen;
-        const form = App.root.querySelector('#add-player-form');
-        form.hidden = !addFormOpen;
-        if (addFormOpen) App.root.querySelector('#new-number').focus();
+      App.root.querySelector('#add-player-toggle-btn').addEventListener('click', (e) => {
+        addFormOpen = true;
+        e.currentTarget.hidden = true;
+        App.root.querySelector('#add-player-form').hidden = false;
+        App.root.querySelector('#new-number').focus();
       });
 
       const playerModal = App.root.querySelector('#player-modal');
@@ -265,7 +277,7 @@ const Screens = {
         location.hash = `#/start/${team.id}`;
       });
 
-      attachHelpFab();
+      wireHelpButton();
     };
 
     render();
@@ -305,7 +317,7 @@ const Screens = {
 
     App.root.innerHTML = `
       <header class="topbar">
-        <a href="#/team/${team.id}" class="back-link">&larr; ${escapeHtml(team.name)}</a>
+        <a href="#/team/${team.id}" class="back-link" aria-label="Back to ${escapeHtml(team.name)}">${icon('back', 22)}</a>
         <h1>Season History</h1>
       </header>
       <main class="list-page">
@@ -353,8 +365,9 @@ const Screens = {
 
     App.root.innerHTML = `
       <header class="topbar">
-        <a href="#/team/${team.id}" class="back-link">&larr; ${escapeHtml(team.name)}</a>
+        <a href="#/team/${team.id}" class="back-link" aria-label="Back to ${escapeHtml(team.name)}">${icon('back', 22)}</a>
         <h1>Start Game</h1>
+        ${helpButtonHtml()}
       </header>
       <main class="list-page">
         <section class="field-count-picker">
@@ -419,7 +432,7 @@ const Screens = {
       location.hash = '#/game';
     });
 
-    attachHelpFab();
+    wireHelpButton();
   },
 
   gameSession() {
@@ -482,22 +495,29 @@ const Screens = {
 
     App.root.innerHTML = `
       <header class="topbar game-header">
-        <button id="goal-btn" class="icon-btn goal-btn" type="button" ${session.live ? '' : 'disabled'}>&#9917; Goal</button>
-        ${session.live ? `<span id="half-clock" class="half-clock">${halfClockLabel(Date.now())}</span>` : ''}
-        <div class="header-right">
-          <button id="info-panel-btn" class="icon-btn">&#128202; Stats</button>
-          <button id="settings-btn" class="icon-btn">&#9881; Settings</button>
+        <button id="goal-btn" class="icon-btn goal-btn" type="button" ${session.live ? '' : 'disabled'}>${icon('goal')} Goal</button>
+        <div class="header-center">
+          ${session.live ? `<span id="half-clock" class="half-clock">${halfClockLabel(Date.now())}</span>` : ''}
+        </div>
+        <button id="info-panel-btn" class="icon-btn" type="button">${icon('players')}<span class="btn-label">Players</span></button>
+        <button id="settings-btn" class="icon-btn icon-only" type="button" aria-label="Menu" aria-haspopup="true">${MORE_ICON}</button>
+        <div id="settings-menu" class="menu-layer" hidden>
+          <div class="menu-backdrop"></div>
+          <div id="settings-dropdown" class="settings-dropdown">
+            <div class="menu-label">Game</div>
+            ${session.live ? `<button id="adjust-clock-btn" class="settings-item" type="button">${icon('clock', 20)} Adjust clock</button>` : ''}
+            <button id="fc-edit-btn" class="settings-item" type="button">${icon('field', 20)} Players on field <span class="menu-value">${session.fieldCount} ${icon('chevron', 14)}</span></button>
+            <div class="menu-label">Roster</div>
+            <button id="add-late-btn" class="settings-item" type="button">${icon('addPerson', 20)} Add late player</button>
+            <div class="menu-divider"></div>
+            <button id="help-btn" class="settings-item" type="button">${icon('help', 20)} Help &amp; feedback</button>
+            <div class="menu-divider"></div>
+            <button id="end-game-btn" class="settings-item settings-item-danger" type="button">${icon('flag', 20)} End game</button>
+            <div class="settings-version">${escapeHtml(APP_VERSION)}</div>
+          </div>
         </div>
       </header>
       <div class="scoreboard" id="scoreboard"></div>
-      <div id="settings-dropdown" class="settings-dropdown" hidden>
-        <a href="#/team/${team.id}" class="settings-item settings-item-danger" id="end-game-btn">&times; End Game</a>
-        <button id="fc-edit-btn" class="settings-item" type="button">${session.fieldCount} on field &#9998;</button>
-        <button id="add-late-btn" class="settings-item" type="button">+ Add Player</button>
-        ${session.live ? '<button id="adjust-clock-btn" class="settings-item" type="button">&#8986; Adjust Clock</button>' : ''}
-        <button id="help-btn" class="settings-item" type="button">&#10067; Help</button>
-        <div class="settings-item settings-version">${escapeHtml(APP_VERSION)}</div>
-      </div>
       <div id="kickoff-container"></div>
       <div id="sub-queue-container"></div>
       <main class="game-main">
@@ -509,7 +529,6 @@ const Screens = {
         </div>
         <div id="undo-banner" class="undo-banner" hidden></div>
         <div id="field-warning" class="field-warning" hidden></div>
-        <p class="field-hint">Drag a player onto the goal to make them goalie, or onto another player to swap/replace them. Drag off the field to bench them. Tap two field players to queue a swap, or a bench and a field player to queue a substitution, for later.</p>
       </main>
       <div id="late-modal" class="modal" hidden></div>
       <div id="goal-modal" class="modal" hidden></div>
@@ -517,8 +536,8 @@ const Screens = {
       <div id="info-panel" class="modal" hidden>
         <div class="modal-card">
           <div class="panel-header">
-            <h2>${escapeHtml(team.name)}</h2>
-            <button id="info-panel-close" class="panel-close-btn" type="button" aria-label="Close">&times;</button>
+            <h2>Players</h2>
+            <button id="info-panel-close" class="panel-close-btn" type="button" aria-label="Close">${icon('close', 20)}</button>
           </div>
           <section class="panel-section">
             <h3>Time by position</h3>
@@ -1074,25 +1093,26 @@ const Screens = {
     }
 
     // --- Header actions ---
+    // The menu layer (backdrop + card) is what's shown/hidden; any tap outside the card, or on
+    // one of its items, closes it.
+    const settingsMenu = App.root.querySelector('#settings-menu');
     const settingsDropdown = App.root.querySelector('#settings-dropdown');
     App.root.querySelector('#settings-btn').addEventListener('click', (e) => {
       e.stopPropagation();
-      settingsDropdown.hidden = !settingsDropdown.hidden;
+      settingsMenu.hidden = !settingsMenu.hidden;
     });
     function closeSettingsOnOutsideClick(e) {
-      if (!settingsDropdown.hidden && !settingsDropdown.contains(e.target) && e.target.id !== 'settings-btn') {
-        settingsDropdown.hidden = true;
-      }
+      if (settingsMenu.hidden) return;
+      if (!settingsDropdown.contains(e.target) || e.target.closest('.settings-item')) settingsMenu.hidden = true;
     }
     document.addEventListener('click', closeSettingsOnOutsideClick);
 
-    App.root.querySelector('#end-game-btn').addEventListener('click', (e) => {
-      e.preventDefault();
+    App.root.querySelector('#end-game-btn').addEventListener('click', () => {
       if (!confirm('End this game? The current session will be cleared.')) return;
       finishGame();
     });
 
-    App.root.querySelector('#help-btn').addEventListener('click', () => showHelp());
+    App.root.querySelector('#help-btn').addEventListener('click', () => showHelpMenu());
 
     App.root.querySelector('#fc-edit-btn').addEventListener('click', () => {
       const val = prompt('Players on field, total including the goalie (3-15):', session.fieldCount);
@@ -1227,6 +1247,10 @@ const Screens = {
     // --- Info panel: a bottom sheet, hidden until opened. Currently just position/time
     // tracking, but built as a general container so future sections (e.g. settings) can be
     // added alongside without redoing the panel mechanism.
+    // Which player's row in the Players panel is expanded to show its Mark Out / Remove actions -
+    // one at a time, so the list stays a readable column of stats rather than a wall of buttons.
+    let expandedPlayerId = null;
+
     function renderInfoPanel() {
       const now = Date.now();
       const content = App.root.querySelector('#info-panel-content');
@@ -1271,19 +1295,29 @@ const Screens = {
              </div>`;
 
         return `
-          <div class="player-stat-row ${p.unavailable ? 'player-out' : ''}">
-            <div class="player-stat-name">
+          <div class="player-stat-row ${p.unavailable ? 'player-out' : ''} ${expandedPlayerId === rp.id ? 'expanded' : ''}">
+            <button class="player-stat-name" data-expand-player="${rp.id}" type="button" aria-expanded="${expandedPlayerId === rp.id}">
               <span class="jersey-badge ${rp.number ? '' : 'no-number'}">${escapeHtml(rp.number || '?')}</span>${escapeHtml(rp.name)}
               ${p.unavailable ? '<span class="out-tag">Out</span>' : ''}
-            </div>
+              <span class="player-stat-chevron">${icon('chevron', 16)}</span>
+            </button>
             ${barHtml}
             <div class="player-stat-detail">${chips.join('')}</div>
+            ${expandedPlayerId === rp.id ? `
             <div class="player-stat-actions">
               <button class="secondary-btn small" data-toggle-unavailable="${rp.id}" type="button">${p.unavailable ? 'Mark Available' : 'Mark Out'}</button>
               <button class="danger-btn small" data-remove-player="${rp.id}" type="button">Remove</button>
-            </div>
+            </div>` : ''}
           </div>`;
       }).join('');
+
+      content.querySelectorAll('[data-expand-player]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const id = btn.getAttribute('data-expand-player');
+          expandedPlayerId = expandedPlayerId === id ? null : id;
+          renderInfoPanel();
+        });
+      });
 
       content.querySelectorAll('[data-toggle-unavailable]').forEach((btn) => {
         btn.addEventListener('click', () => {
@@ -1359,6 +1393,7 @@ const Screens = {
 
     const infoPanel = App.root.querySelector('#info-panel');
     App.root.querySelector('#info-panel-btn').addEventListener('click', () => {
+      expandedPlayerId = null;
       renderInfoPanel();
       renderGoalLog();
       infoPanel.hidden = false;
@@ -1533,9 +1568,22 @@ const Screens = {
     renderScoreboard();
     rerender();
     App._tick = setInterval(tick, 1000);
+
+    // Back-button guard: keep an extra #/game history entry on top, so the phone's back button
+    // pops that (same hash - no hashchange, no navigation) instead of leaving the game or, in the
+    // installed app, closing it outright. Each time it's popped, push it straight back.
+    if (!(history.state && history.state.gameGuard)) history.pushState({ gameGuard: true }, '', '#/game');
+    function onPopState() {
+      if (location.hash !== '#/game' || !DB.loadSession()) return;
+      history.pushState({ gameGuard: true }, '', '#/game');
+      showToast('Game in progress - use the ⋯ menu > End game to leave');
+    }
+    window.addEventListener('popstate', onPopState);
+
     App._cleanup = () => {
       window.removeEventListener('pointermove', onPointerMove);
       document.removeEventListener('click', closeSettingsOnOutsideClick);
+      window.removeEventListener('popstate', onPopState);
     };
   },
 };
