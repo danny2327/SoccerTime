@@ -14,6 +14,15 @@ const PRECACHE_URLS = [
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-512-maskable.png',
+  './img/guide/teams.jpg',
+  './img/guide/team-home.jpg',
+  './img/guide/move.jpg',
+  './img/guide/queue.jpg',
+  './img/guide/field.jpg',
+  './img/guide/goal.jpg',
+  './img/guide/players.jpg',
+  './img/guide/menu.jpg',
+  './img/guide/season.jpg',
 ];
 
 self.addEventListener('install', (event) => {

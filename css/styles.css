@@ -900,6 +900,9 @@ button.back-link { background: none; border: none; padding: 0; flex-shrink: 0; }
   width: 100%;
   max-width: 480px;
   max-height: 82vh;
+  /* dvh = the height actually visible, so the sheet never slides up under a phone browser's
+     address bar (plain vh measures as if the bar were hidden). vh stays as the fallback. */
+  max-height: 82dvh;
   overflow-y: auto;
   border-radius: 16px 16px 0 0;
   padding: 16px;
@@ -976,21 +979,6 @@ button.back-link { background: none; border: none; padding: 0; flex-shrink: 0; }
   margin: 0 -16px 12px;
   padding: max(16px, env(safe-area-inset-top)) 16px 8px;
   background: var(--bg);
-}
-
-.help-section { margin: 0 0 16px; }
-.help-section:last-of-type { margin-bottom: 18px; }
-
-.help-section h3 {
-  margin: 0 0 4px;
-  font-size: 14px;
-}
-
-.help-section p {
-  margin: 0;
-  font-size: 13.5px;
-  line-height: 1.45;
-  color: #3a4234;
 }
 
 .help-legend {
@@ -1604,3 +1592,90 @@ button.back-link { background: none; border: none; padding: 0; flex-shrink: 0; }
 /* Light swatches (yellow, white) need an outline to show against the light sheet behind them. */
 .color-swatch.light { box-shadow: inset 0 0 0 1px rgba(0,0,0,0.25); }
 .color-swatch.light.selected { box-shadow: inset 0 0 0 1px rgba(0,0,0,0.25), 0 0 0 2px var(--ink); }
+
+/* --- How to use guide: sectioned, with screenshots and numbered steps matching their callouts --- */
+
+.modal-card.guide-card { max-height: 92vh; max-height: 92dvh; }
+
+.guide-jump {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+
+.guide-jump button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--green-dark);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.guide-jump button:active { background: #eef1ea; }
+
+.guide-section { padding: 16px 0 6px; border-top: 1px solid var(--line); }
+.guide-section:first-of-type { border-top: none; }
+
+.guide-section h3 { margin: 0 0 8px; font-size: 17px; }
+
+.guide-intro, .guide-note { margin: 0 0 10px; font-size: 14px; line-height: 1.45; color: #3a4234; }
+.guide-note { margin-top: 8px; color: #5b6452; }
+
+.guide-img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+  margin-bottom: 10px;
+}
+
+/* Steps numbered with the same orange discs as the callouts in the screenshot above them. */
+.guide-steps { list-style: none; counter-reset: guide; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+
+.guide-steps li {
+  counter-increment: guide;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.guide-steps li::before {
+  content: counter(guide);
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #e8590c;
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: -1px;
+}
+
+.guide-section .help-legend { margin-top: 12px; }
+.guide-section .help-legend-item p { font-size: 14px; }
+
+/* First-run welcome on an empty Teams screen, pointing straight at the guide. */
+.welcome-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 20px 18px 16px;
+  text-align: center;
+}
+
+.welcome-card h2 { margin: 0 0 6px; font-size: 21px; }
+.welcome-card p { margin: 0 0 16px; font-size: 15px; line-height: 1.45; color: #3a4234; }
+.welcome-card .primary-btn { display: flex; align-items: center; justify-content: center; gap: 8px; }
+.welcome-card .welcome-hint { margin: 12px 0 0; font-size: 13px; color: #6b7462; }

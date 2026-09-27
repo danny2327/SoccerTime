@@ -196,7 +196,13 @@ const Screens = {
         ${helpButtonHtml()}
       </header>
       <main class="list-page teams-page">
-        ${teams.length === 0 ? `<p class="empty">No teams yet. Add one to get started.</p>` : ''}
+        ${teams.length === 0 ? `
+          <section class="welcome-card">
+            <h2>Welcome to SoccerTime</h2>
+            <p>Track playing time, subs and goals for your team, right from the sideline.</p>
+            <button id="welcome-guide-btn" class="primary-btn big" type="button">${icon('book')} See how it works</button>
+            <p class="welcome-hint">Ready? Create your team below, or load a demo team to try it out.</p>
+          </section>` : ''}
         <ul class="team-list">
           ${teams.map((t) => {
             const games = DB.loadGames(t.id);
@@ -237,6 +243,8 @@ const Screens = {
     });
 
     App.root.querySelector('#demo-team-btn').addEventListener('click', () => { createDemoTeam(); });
+    const welcomeGuideBtn = App.root.querySelector('#welcome-guide-btn');
+    if (welcomeGuideBtn) welcomeGuideBtn.addEventListener('click', () => showGuide());
 
     // Per-team color picker (deleting a team lives in that team's own ... menu, away from here).
     App.root.querySelectorAll('[data-team-menu]').forEach((btn) => {
