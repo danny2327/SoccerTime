@@ -181,6 +181,7 @@ const ICON_PATHS = {
   chevron: '<path d="M9 6l6 6-6 6"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
+  whistle: '<circle cx="9" cy="14" r="6"/><path d="M13.5 10L21 6v4l-5 2.5"/><path d="M9 3v3"/>',
   trash: '<path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/>',
 };
 
@@ -230,8 +231,7 @@ const GUIDE_SECTIONS = [
     id: 'queue', title: 'Planning subs ahead', img: 'queue',
     intro: 'Tap a bench player, then a field player, to queue a sub. Tap two field players to queue a swap. Tap either again to cancel it.',
     steps: [
-      '<b>Coming off</b> - the names to call out.',
-      'Everything queued. <b>&times;</b> removes one.',
+      'Each change: the position they’re going to, who goes on, who comes off. <b>&times;</b> removes one.',
       '<b>Apply</b> makes all the changes at once (you can undo it).',
       'A badge marks each queued player.',
     ],
@@ -245,6 +245,7 @@ const GUIDE_SECTIONS = [
       'Bench players show their total field time.',
     ],
     legend: true,
+    note: 'At full time the clock keeps going in orange (<b>+1:23</b>) for extra time. Tap <b>End Half</b> when the ref blows the whistle.',
   },
   {
     id: 'goals', title: 'Goals', img: 'goal',
@@ -261,7 +262,7 @@ const GUIDE_SECTIONS = [
   },
   {
     id: 'menu', title: 'The &#8943; menu', img: 'menu',
-    intro: '<b>Adjust clock</b> if kickoff started early or late. Change <b>players on field</b> mid-game. <b>Add late player</b> for someone who just arrived. <b>End game</b> saves it to the season.',
+    intro: '<b>Adjust clock</b> if kickoff started early or late. <b>End half now</b> if the ref ends it early. Change <b>players on field</b> mid-game. <b>Add late player</b> for someone who just arrived. <b>End game</b> saves it to the season.',
   },
   {
     id: 'season', title: 'Season', img: 'season',

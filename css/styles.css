@@ -463,64 +463,61 @@ button.back-link { background: none; border: none; padding: 0; flex-shrink: 0; }
   padding: 10px 12px;
 }
 
-/* The shout-it-out line: who's coming off, big enough to read at arm's length. */
-.coming-off {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-  margin-bottom: 10px;
-  padding: 8px 12px;
-  background: #fff;
-  border-left: 5px solid #2f6fb0;
-  border-radius: 8px;
-}
-
-.coming-off-label {
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: #2f6fb0;
-}
-
-.coming-off-names { display: flex; flex-wrap: wrap; gap: 2px 14px; }
-
-.coming-off-name {
-  font-size: 24px;
-  font-weight: 800;
-  line-height: 1.2;
-  color: var(--ink);
-  white-space: nowrap;
-}
-
 .sub-queue-chips {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 6px;
   margin-bottom: 8px;
 }
 
+/* One full-width row per queued change, all sharing the same fixed columns so the names line up
+   down the list regardless of their length: position | going in | for/swap | coming off | x. */
 .sub-queue-chip {
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr) 30px minmax(0, 1fr) 30px;
   align-items: center;
-  gap: 6px;
+  column-gap: 6px;
   background: #fff;
   border: 1px solid #2f6fb0;
   color: var(--ink);
-  border-radius: 20px;
-  padding: 4px 6px 4px 10px;
-  font-size: 12.5px;
-  font-weight: 600;
+  border-radius: 10px;
+  padding: 4px;
+  font-size: 16px;
+  font-weight: 700;
+  min-height: 48px;
 }
+
+.sub-queue-pos {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #e8f0f9;
+  border-radius: 7px;
+  line-height: 1.1;
+}
+
+.sub-queue-pos b { font-size: 15px; font-weight: 800; color: #1f4f80; }
+.sub-queue-pos small { font-size: 10.5px; font-weight: 700; color: #4a6680; }
+
+/* Long names wrap within their own column rather than being cut off - the name is the thing
+   being read out, so all of it should show; the row just grows a line taller. */
+.sub-queue-name { line-height: 1.2; overflow-wrap: anywhere; padding: 3px 0; }
+
+.sub-queue-to { display: block; font-size: 12px; font-weight: 700; opacity: 0.85; margin-top: 1px; }
+
+.sub-queue-joiner { text-align: center; font-size: 12px; font-weight: 700; color: #6b7462; }
 
 .sub-queue-remove {
   background: none;
   border: none;
   color: #2f6fb0;
-  font-size: 15px;
+  font-size: 20px;
   line-height: 1;
-  padding: 2px 4px;
+  width: 30px;
+  height: 36px;
+  padding: 0;
 }
 
 /* A queued position swap (both players already on the field) instead of a substitution - solid
@@ -531,6 +528,9 @@ button.back-link { background: none; border: none; padding: 0; flex-shrink: 0; }
   color: #fff;
 }
 .sub-queue-chip-swap .sub-queue-remove { color: #fff; }
+.sub-queue-chip-swap .sub-queue-pos { background: rgba(255,255,255,0.18); }
+.sub-queue-chip-swap .sub-queue-pos b, .sub-queue-chip-swap .sub-queue-pos small,
+.sub-queue-chip-swap .sub-queue-joiner { color: #fff; }
 
 .sub-queue-execute { background: #2f6fb0; color: #fff; }
 .sub-queue-execute:active { background: #24578c; }
@@ -1679,3 +1679,14 @@ button.back-link { background: none; border: none; padding: 0; flex-shrink: 0; }
 .welcome-card p { margin: 0 0 16px; font-size: 15px; line-height: 1.45; color: #3a4234; }
 .welcome-card .primary-btn { display: flex; align-items: center; justify-content: center; gap: 8px; }
 .welcome-card .welcome-hint { margin: 12px 0 0; font-size: 13px; color: #6b7462; }
+
+/* --- Extra time: the clock past full time, and the End Half bar in the kickoff bar's slot --- */
+
+.half-clock.half-clock-extra {
+  background: #e8590c;
+  color: #fff;
+  border-color: #e8590c;
+}
+
+.kickoff-bar.end-half-bar { background: #b0281c; color: #fff; }
+.kickoff-bar.end-half-bar:active { background: #8f1f16; }

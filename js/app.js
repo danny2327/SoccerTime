@@ -966,12 +966,58 @@ const Screens = {
 
     const half = session.half || 1;
 
+    // When the half's scheduled time runs out (null before kickoff / between halves).
+    function scheduledHalfEnd() {
+      if (!session.live || !session.halfStartedAt || !session.halfLengthMinutes) return null;
+      return session.halfStartedAt + session.halfLengthMinutes * 60 * 1000;
+    }
+
+    function inExtraTime(now) {
+      const end = scheduledHalfEnd();
+      return end != null && now >= end;
+    }
+
+    // Counts down to 0:00, then - since the ref's watch decides when a half really ends, not
+    // ours - keeps going as extra time ("+1:23") until the coach taps End Half.
     function halfClockLabel(now) {
       const label = `H${session.half || 1}`;
-      if (!session.live || !session.halfStartedAt || !session.halfLengthMinutes) return label;
-      const halfEndsAt = session.halfStartedAt + session.halfLengthMinutes * 60 * 1000;
-      const remaining = Math.max(0, Math.round((halfEndsAt - now) / 1000));
-      return `${label} · ${formatDuration(remaining)}`;
+      const end = scheduledHalfEnd();
+      if (end == null) return label;
+      if (now >= end) return `${label} · +${formatDuration(Math.floor((now - end) / 1000))}`;
+      return `${label} · ${formatDuration(Math.max(0, Math.round((end - now) / 1000)))}`;
+    }
+
+    // Ends the current half at `when` (default: now) - the ref's whistle, not the countdown.
+    // The last half ends the game, which saves it to the season, so that one asks first. If the
+    // half has run well past its time (the coach most likely forgot to tap End Half at the
+    // whistle), ask how much extra time was really played, so the break doesn't count as play.
+    async function endHalfNow(opts) {
+      const o = opts || {};
+      const now = Date.now();
+      const isLast = (session.half || 1) >= TOTAL_HALVES;
+      const end = scheduledHalfEnd();
+      let endAt = now;
+      if (end != null && now - end > 10 * 60 * 1000) {
+        const overMin = Math.floor((now - end) / 60000);
+        const played = await showNumberPrompt(`How much extra time was played in half ${session.half || 1}?`, {
+          hint: `The clock ran ${overMin} min past full time. Minutes after full time that the half actually ended:`,
+          value: Math.min(5, overMin), min: 0, max: overMin, confirmLabel: isLast ? 'Next' : 'End half',
+        });
+        if (played === null) return;
+        endAt = end + played * 60 * 1000;
+      } else if (o.confirmMessage && !await showConfirm(o.confirmMessage, isLast ? 'End game' : 'End half', isLast)) {
+        return;
+      }
+      if (isLast && !o.confirmMessage && !await showConfirm('End the game? It will be saved to the season history.', 'End game', true)) {
+        return;
+      }
+      endHalf(session, endAt);
+      if (session.half > TOTAL_HALVES) {
+        finishGame();
+      } else {
+        DB.saveSession(session);
+        reloadGameScreen();
+      }
     }
 
     function totalOnField() {
@@ -1019,7 +1065,7 @@ const Screens = {
         ${preKickoff ? `<button id="cancel-setup-btn" class="back-link" type="button" aria-label="Back to ${escapeHtml(team.name)}">${icon('back', 22)}</button>` : ''}
         <button id="goal-btn" class="icon-btn goal-btn" type="button" ${session.live ? '' : 'disabled'}>${icon('goal')} Goal</button>
         <div class="header-center">
-          ${session.live ? `<span id="half-clock" class="half-clock">${halfClockLabel(Date.now())}</span>` : ''}
+          ${session.live ? `<span id="half-clock" class="half-clock ${inExtraTime(Date.now()) ? 'half-clock-extra' : ''}">${halfClockLabel(Date.now())}</span>` : ''}
         </div>
         <button id="info-panel-btn" class="icon-btn" type="button">${icon('players')}<span class="btn-label">Players</span></button>
         <button id="settings-btn" class="icon-btn icon-only" type="button" aria-label="Menu" aria-haspopup="true">${MORE_ICON}</button>
@@ -1028,6 +1074,7 @@ const Screens = {
           <div id="settings-dropdown" class="settings-dropdown">
             <div class="menu-label">Game</div>
             ${session.live ? `<button id="adjust-clock-btn" class="settings-item" type="button">${icon('clock', 20)} Adjust clock</button>` : ''}
+            ${session.live ? `<button id="end-half-menu-btn" class="settings-item" type="button">${icon('whistle', 20)} End half ${session.half || 1} now</button>` : ''}
             <button id="fc-edit-btn" class="settings-item" type="button">${icon('field', 20)} Players on field <span class="menu-value">${session.fieldCount} ${icon('chevron', 14)}</span></button>
             <div class="menu-label">Roster</div>
             <button id="add-late-btn" class="settings-item" type="button">${icon('addPerson', 20)} Add late player</button>
@@ -1095,7 +1142,13 @@ const Screens = {
     // Re-rendered on every drag (not just full-screen reloads), since who's on the field - and
     // therefore whether kickoff is allowed - can change with any drag.
     function renderKickoffBar() {
-      if (session.live) { kickoffContainer.innerHTML = ''; return; }
+      if (session.live) {
+        if (!inExtraTime(Date.now())) { kickoffContainer.innerHTML = ''; return; }
+        const isLast = (session.half || 1) >= TOTAL_HALVES;
+        kickoffContainer.innerHTML = `<button id="end-half-btn" class="kickoff-bar end-half-bar" type="button">&#9632; ${isLast ? 'End Game' : `End Half ${session.half || 1}`}</button>`;
+        kickoffContainer.querySelector('#end-half-btn').addEventListener('click', () => { endHalfNow(); });
+        return;
+      }
       const total = totalOnField();
       const label = (session.half || 1) > 1 ? `Start Half ${session.half}` : 'Kick Off';
       if (total === session.fieldCount) {
@@ -1111,6 +1164,22 @@ const Screens = {
       }
     }
 
+    // A field player's spot, for telling a sub where they're going: the line (ST / AM / DM / DEF,
+    // same labels as the Players panel) plus the side within it, worked out from their place in
+    // the row - one in a row is centre, two are left/right, three add a centre, four split into
+    // left, mid-left, mid-right, right. The goalie is just GK.
+    const ROW_LABELS = ['ST', 'AM', 'DM', 'DEF'];
+    const SIDES_BY_COUNT = [[], ['centre'], ['left', 'right'], ['left', 'centre', 'right'], ['left', 'mid-left', 'mid-right', 'right']];
+    function positionOf(pid) {
+      const p = session.players[pid];
+      if (!p || p.status !== 'field') return null;
+      if (p.isGoalie) return { line: 'GK', side: '' };
+      const ri = FieldLayout.rowIndexOf(session.rows, pid);
+      if (ri == null) return null;
+      const players = session.rows[ri].players;
+      return { line: ROW_LABELS[ri], side: (SIDES_BY_COUNT[players.length] || [])[players.indexOf(pid)] || '' };
+    }
+
     // Re-rendered alongside the kickoff bar for the same reason - who's queued (and against
     // whom) can change on every tap, not just full-screen reloads.
     function renderSubQueue() {
@@ -1122,29 +1191,29 @@ const Screens = {
       // at a glance when the on-field position swaps aren't mixed in between them. Array#sort is
       // stable, so relative order within each group is otherwise untouched.
       const ordered = [...queue].sort((a, b) => Number(isSwapPair(a)) - Number(isSwapPair(b)));
-      // Big "coming off" callout - just the players actually leaving the field (swaps don't count),
-      // as number + first name, for the coach to read out at a glance and shout across the field.
-      const shortLabel = (rp) => (rp ? `#${rp.number || '?'} ${rp.name.split(/\s+/)[0]}` : '(removed)');
-      const comingOff = ordered.filter((pair) => !isSwapPair(pair)).map((pair) => shortLabel(rosterById[pair.offId]));
       subQueueContainer.innerHTML = `
         <div class="sub-queue-bar">
-          ${comingOff.length ? `
-            <div class="coming-off">
-              <span class="coming-off-label">Coming off</span>
-              <span class="coming-off-names">${comingOff.map((n) => `<span class="coming-off-name">${escapeHtml(n)}</span>`).join('')}</span>
-            </div>` : ''}
           <div class="sub-queue-chips">
             ${ordered.map((pair) => {
+              // One row per change, in fixed columns so names line up whatever their length:
+              // [where they're going] [player going in] [for / swap] [player coming off] [x].
+              // The badge is the coming-off player's spot - the one the incoming player (or, for a
+              // swap, the other player) takes over. A swap moves both players, so the second
+              // player's destination (the first player's current spot) goes under their name.
               const off = rosterById[pair.offId];
               const on = rosterById[pair.onId];
               const label = (rp) => rp ? `#${escapeHtml(rp.number || '?')} ${escapeHtml(rp.name)}` : '(removed)';
               const isSwap = isSwapPair(pair);
-              const body = isSwap ? `${label(off)} &harr; ${label(on)}` : `${label(on)} &rarr; for ${label(off)}`;
+              const pos = positionOf(pair.offId);
+              const otherPos = isSwap ? positionOf(pair.onId) : null;
               return `
-                <span class="sub-queue-chip${isSwap ? ' sub-queue-chip-swap' : ''}">
-                  ${body}
+                <div class="sub-queue-chip${isSwap ? ' sub-queue-chip-swap' : ''}">
+                  <span class="sub-queue-pos">${pos ? `<b>${pos.line}</b>${pos.side ? `<small>${pos.side}</small>` : ''}` : ''}</span>
+                  <span class="sub-queue-name">${label(on)}</span>
+                  <span class="sub-queue-joiner">${isSwap ? '&#8644;' : 'for'}</span>
+                  <span class="sub-queue-name">${label(off)}${otherPos ? `<small class="sub-queue-to">to ${otherPos.line}${otherPos.side ? ` ${otherPos.side}` : ''}</small>` : ''}</span>
                   <button class="sub-queue-remove" data-unqueue="${pair.id}" type="button" aria-label="Remove">&times;</button>
-                </span>`;
+                </div>`;
             }).join('')}
           </div>
           <button id="make-subs-btn" class="kickoff-bar sub-queue-execute" type="button">&#8646; Apply ${queue.length} Change${queue.length > 1 ? 's' : ''}</button>
@@ -1302,23 +1371,19 @@ const Screens = {
       const now = Date.now();
 
       if (session.live && session.halfLengthMinutes && session.halfStartedAt) {
-        const halfEndsAt = session.halfStartedAt + session.halfLengthMinutes * 60 * 1000;
-        if (now >= halfEndsAt) {
-          // Half's time is up: freeze everyone's clock exactly at the boundary, leave the
-          // lineup untouched. If that was the last half, there's nothing left to kick off, so
-          // the game ends itself here rather than reloading into a "Start Half 3" that doesn't
-          // exist; otherwise reload the screen (brings back the Kick Off bar for the next half).
-          endHalf(session, halfEndsAt);
-          if (session.half > TOTAL_HALVES) {
-            finishGame();
-          } else {
-            DB.saveSession(session);
-            reloadGameScreen();
-          }
-          return;
-        }
+        // Full time on the countdown doesn't end the half - play goes on until the ref's whistle.
+        // The clock flips to counting extra time, and the End Half bar appears (with one buzz,
+        // where the phone supports it) for the coach to tap when the half really ends.
+        const extra = inExtraTime(now);
         const halfClockEl = App.root.querySelector('#half-clock');
-        if (halfClockEl) halfClockEl.textContent = halfClockLabel(now);
+        if (halfClockEl) {
+          halfClockEl.textContent = halfClockLabel(now);
+          halfClockEl.classList.toggle('half-clock-extra', extra);
+        }
+        if (extra && !kickoffContainer.querySelector('#end-half-btn')) {
+          renderKickoffBar();
+          try { if (navigator.vibrate) navigator.vibrate([200, 100, 200]); } catch (err) { /* not supported */ }
+        }
       }
 
       const needsSubIds = computeSubCandidates(now);
@@ -1673,6 +1738,21 @@ const Screens = {
 
     App.root.querySelector('#help-btn').addEventListener('click', () => showHelpMenu());
 
+    const endHalfMenuBtn = App.root.querySelector('#end-half-menu-btn');
+    if (endHalfMenuBtn) {
+      endHalfMenuBtn.addEventListener('click', () => {
+        const now = Date.now();
+        const end = scheduledHalfEnd();
+        const isLast = (session.half || 1) >= TOTAL_HALVES;
+        const left = end != null && now < end ? ` with ${formatDuration(Math.round((end - now) / 1000))} still on the clock` : '';
+        endHalfNow({
+          confirmMessage: isLast
+            ? `End the game now${left}? It will be saved to the season history.`
+            : `End half ${session.half || 1} now${left}?`,
+        });
+      });
+    }
+
     App.root.querySelector('#fc-edit-btn').addEventListener('click', async () => {
       const n = await showNumberPrompt('Players on field', {
         hint: 'Total, including the goalie (e.g. 7v7 \u2192 7)', value: session.fieldCount, min: 3, max: 15,
@@ -1825,8 +1905,6 @@ const Screens = {
         content.innerHTML = '<p class="empty">No players in this game yet.</p>';
         return;
       }
-
-      const ROW_LABELS = ['ST', 'AM', 'DM', 'DEF'];
 
       content.innerHTML = sorted.map((rp) => {
         const p = session.players[rp.id];

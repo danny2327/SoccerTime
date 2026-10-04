@@ -230,10 +230,9 @@ const HELPERS = () => {
   await page.tap('.token-field >> nth=5'); await settle();
   {
     await page.evaluate(() => {
-      window.__markEl('.coming-off', 1, 170, 0);
-      window.__markRightOf('.sub-queue-chip', 2, 0, 8);
-      window.__markEl('#make-subs-btn', 3, 150, 0);
-      window.__markRightOf('.token-bench .token-circle', 4, 1, 12);
+      window.__markEl('.sub-queue-joiner', 1, 0, 26, 0);
+      window.__markEl('#make-subs-btn', 2, 150, 0);
+      window.__markRightOf('.token-bench .token-circle', 3, 1, 12);
     });
     const strip = await rect('#bench-strip');
     await shot('queue', 60, strip.bottom + 6);
