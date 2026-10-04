@@ -48,9 +48,31 @@ function setRow(session, playerId, newRowIndex, now) {
   p.lastRowChange = now;
 }
 
+// A field player's spot: the line (ST / AM / DM / DEF) plus the side within it, worked out from
+// their place in the row - one in a row is centre, two are left/right, three add a centre, four
+// split into left, mid-left, mid-right, right. The goalie is just GK. Null if not on the field.
+const ROW_LABELS = ['ST', 'AM', 'DM', 'DEF'];
+const SIDES_BY_COUNT = [[], ['centre'], ['left', 'right'], ['left', 'centre', 'right'], ['left', 'mid-left', 'mid-right', 'right']];
+function fieldPositionOf(session, pid) {
+  const p = session.players[pid];
+  if (!p || p.status !== 'field') return null;
+  if (p.isGoalie) return { line: 'GK', side: '' };
+  const ri = FieldLayout.rowIndexOf(session.rows, pid);
+  if (ri == null) return null;
+  const players = session.rows[ri].players;
+  return { line: ROW_LABELS[ri], side: (SIDES_BY_COUNT[players.length] || [])[players.indexOf(pid)] || '' };
+}
+
 function setStatus(session, playerId, newStatus, now) {
   const p = session.players[playerId];
   if (!p || p.status === newStatus) return;
+  // Leaving the field: remember where they were playing, shown on their bench token so the coach
+  // knows where they last played. Every caller benches a player before taking them out of the
+  // rows, so their spot is still readable here. Not recorded before the first kickoff - shuffling
+  // the starting lineup isn't "playing" a position.
+  if (newStatus === 'bench' && p.status === 'field' && session.kickoffAt) {
+    p.lastPosition = fieldPositionOf(session, playerId);
+  }
   if (session.live) {
     if (p.status === 'field') p.fieldSeconds += (now - p.lastChange) / 1000;
     else p.benchSeconds += (now - p.lastChange) / 1000;

@@ -1164,21 +1164,8 @@ const Screens = {
       }
     }
 
-    // A field player's spot, for telling a sub where they're going: the line (ST / AM / DM / DEF,
-    // same labels as the Players panel) plus the side within it, worked out from their place in
-    // the row - one in a row is centre, two are left/right, three add a centre, four split into
-    // left, mid-left, mid-right, right. The goalie is just GK.
-    const ROW_LABELS = ['ST', 'AM', 'DM', 'DEF'];
-    const SIDES_BY_COUNT = [[], ['centre'], ['left', 'right'], ['left', 'centre', 'right'], ['left', 'mid-left', 'mid-right', 'right']];
-    function positionOf(pid) {
-      const p = session.players[pid];
-      if (!p || p.status !== 'field') return null;
-      if (p.isGoalie) return { line: 'GK', side: '' };
-      const ri = FieldLayout.rowIndexOf(session.rows, pid);
-      if (ri == null) return null;
-      const players = session.rows[ri].players;
-      return { line: ROW_LABELS[ri], side: (SIDES_BY_COUNT[players.length] || [])[players.indexOf(pid)] || '' };
-    }
+    // A field player's spot, for telling a sub where they're going (see fieldPositionOf).
+    const positionOf = (pid) => fieldPositionOf(session, pid);
 
     // Re-rendered alongside the kickoff bar for the same reason - who's queued (and against
     // whom) can change on every tap, not just full-screen reloads.
@@ -1323,6 +1310,7 @@ const Screens = {
         </div>
         <div class="token-name">${escapeHtml(name)}</div>
         ${isField ? '' : '<div class="token-field-total"></div>'}
+        ${!isField && p.lastPosition ? `<div class="token-last-pos" title="Last played">${p.lastPosition.line}${p.lastPosition.side ? ` ${p.lastPosition.side}` : ''}</div>` : ''}
       `;
       return el;
     }

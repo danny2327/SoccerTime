@@ -181,6 +181,7 @@ const HELPERS = () => {
     gk.fieldSeconds = 0; gk.lastChange = s.halfStartedAt; gk.lastGoalieChange = s.halfStartedAt; gk.goalieSeconds = 0;
     Object.values(s.players).filter((p) => p.status === 'bench').forEach((p, i) => {
       p.fieldSeconds = [5.1, 3.4][i] * 60; p.benchSeconds = 0; p.lastChange = now - [9.4, 11.1][i] * 60000;
+      p.lastPosition = [{ line: 'DM', side: 'right' }, { line: 'AM', side: 'left' }][i];
     });
     s.score = { us: 1, opponent: 0 };
     DB.saveSession(s);

@@ -863,6 +863,19 @@ button.back-link { background: none; border: none; padding: 0; flex-shrink: 0; }
   white-space: nowrap;
 }
 
+/* Where a bench player last played (line + side), as a small tag under their field total. */
+.token-last-pos {
+  margin-top: 2px;
+  padding: 0 5px;
+  border-radius: 6px;
+  background: #dde6d6;
+  color: #34502a;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
 /* On-field tokens are smaller than bench ones - up to 4 fixed rows need to fit comfortably
    in the field's vertical space without adjacent rows overlapping. */
 .token-field { width: 50px; }

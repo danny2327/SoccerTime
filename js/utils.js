@@ -242,7 +242,7 @@ const GUIDE_SECTIONS = [
       'Time on the field this game.',
       'Orange ring - most time on, due for a sub. It rings as many players as are free on the bench.',
       'Gold ring and GK - the goalie. Time in goal doesn’t count toward the ring.',
-      'Bench players show their total field time.',
+      'Bench players show their total field time and where they last played.',
     ],
     legend: true,
     note: 'At full time the clock keeps going in orange (<b>+1:23</b>) for extra time. Tap <b>End Half</b> when the ref blows the whistle.',
