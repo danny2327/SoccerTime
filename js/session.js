@@ -267,9 +267,31 @@ function scoreFromGoals(goals) {
   };
 }
 
+// Each player's final times for the season record: field, bench and goalie seconds plus seconds
+// in each row (ST/AM/DM/DEF), and whether they were marked out. Read through the same getElapsed*
+// helpers as the live panels, so a game ended mid-half (End game from the menu) still counts the
+// stretch that was running.
+function buildPlayerStats(session, now) {
+  return Object.entries(session.players || {}).map(([id, p]) => {
+    const rows = [];
+    for (let i = 0; i < FieldLayout.ROW_COUNT; i++) rows.push(Math.round(getElapsedRow(p, i, now, session.live)));
+    return {
+      id,
+      field: Math.round(getElapsedField(p, now, session.live)),
+      bench: Math.round(getElapsedBench(p, now, session.live)),
+      goalie: Math.round(getElapsedGoalie(p, now, session.live)),
+      rows,
+      out: !!p.unavailable,
+    };
+  });
+}
+
 // Shapes the finished-game summary appended to the team's season history when the coach ends
-// the game (see DB.appendGame) - the session itself is discarded right after.
+// the game (see DB.appendGame) - the session itself is discarded right after. Games saved before
+// notes and player stats existed simply lack those keys; the season screens treat that as "not
+// recorded".
 function buildGameRecord(session) {
+  const now = Date.now();
   return {
     id: uid(),
     date: session.kickoffAt || session.startedAt,
@@ -280,6 +302,8 @@ function buildGameRecord(session) {
     goals: session.goals || [],
     fieldCount: session.fieldCount,
     halfLengthMinutes: session.halfLengthMinutes,
+    notes: session.notes || '',
+    playerStats: buildPlayerStats(session, now),
   };
 }
 

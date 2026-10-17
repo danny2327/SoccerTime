@@ -20,6 +20,9 @@ const App = {
     // outside App.root, so a screen change - e.g. the phone's back button while one is open -
     // wouldn't clear them. Drop any leftovers so they can't sit over the next screen.
     document.querySelectorAll('body > .modal').forEach((m) => m.remove());
+    // After the screen below has rendered (and any redirect into a game in progress has happened),
+    // show "What's new" if this is the first visit since an update - but never over a game.
+    setTimeout(() => maybeShowWhatsNew(location.hash.startsWith('#/game')), 0);
 
     const hash = location.hash.slice(1) || '/teams';
     const parts = hash.split('/').filter(Boolean);
@@ -40,7 +43,8 @@ const App = {
       return Screens.teamHome(parts[1]);
     }
     if (parts[0] === 'game') return Screens.gameSession();
-    if (parts[0] === 'season' && parts[1] && parts[2] === 'game' && parts[3]) return Screens.editGame(parts[1], parts[3]);
+    if (parts[0] === 'season' && parts[1] && parts[2] === 'game' && parts[3] && parts[4] === 'edit') return Screens.editGame(parts[1], parts[3]);
+    if (parts[0] === 'season' && parts[1] && parts[2] === 'game' && parts[3]) return Screens.gameSummary(parts[1], parts[3]);
     if (parts[0] === 'season' && parts[1]) return Screens.seasonHistory(parts[1]);
     if (parts[0] === 'seed-demo') return Screens.seedDemo();
     return Screens.teamsList();
@@ -186,6 +190,31 @@ async function createDemoTeam(skipConfirm) {
   location.hash = `#/team/${team.id}`;
 }
 
+// A player's field-vs-bench bar (green / brown, with a thumb at the split).
+function timeBarHtml(field, bench) {
+  const total = field + bench;
+  if (!(total > 0)) return '<div class="time-bar time-bar-empty"></div>';
+  const pct = (field / total) * 100;
+  return `<div class="time-bar">
+      <div class="time-bar-field" style="width:${pct}%"></div>
+      <div class="time-bar-bench" style="width:${100 - pct}%"></div>
+      <div class="time-bar-thumb" style="left:${pct}%"></div>
+    </div>`;
+}
+
+// Field / bench / goalie totals plus time in each row, as chips (zero rows and goalie left out).
+function timeChipsHtml(field, bench, goalie, rows) {
+  const chips = [
+    `<span class="stat-chip">Field ${formatDuration(field)}</span>`,
+    `<span class="stat-chip">Bench ${formatDuration(bench)}</span>`,
+  ];
+  if (goalie > 0) chips.push(`<span class="stat-chip">GK ${formatDuration(goalie)}</span>`);
+  (rows || []).forEach((secs, i) => {
+    if (secs > 0) chips.push(`<span class="stat-chip">${ROW_LABELS[i]} ${formatDuration(secs)}</span>`);
+  });
+  return chips.join('');
+}
+
 const Screens = {
   teamsList() {
     const teams = DB.loadTeams();
@@ -227,7 +256,7 @@ const Screens = {
         <div class="teams-bottom">
           <button id="new-team-btn" class="primary-btn big" type="button">${icon('plus')} New Team</button>
           <button id="demo-team-btn" class="secondary-btn demo-team-btn" type="button">Load demo team</button>
-          <p class="app-version-footer">SoccerTime ${escapeHtml(APP_VERSION)}</p>
+          <p class="app-version-footer">SoccerTime ${escapeHtml(VERSION_LABEL)}</p>
         </div>
       </main>
     `;
@@ -246,7 +275,7 @@ const Screens = {
     const welcomeGuideBtn = App.root.querySelector('#welcome-guide-btn');
     if (welcomeGuideBtn) welcomeGuideBtn.addEventListener('click', () => showGuide());
 
-    // Per-team color picker (deleting a team lives in that team's own ... menu, away from here).
+    // Per-team color picker (deleting a team lives in that team's own Menu, away from here).
     App.root.querySelectorAll('[data-team-menu]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const id = btn.getAttribute('data-team-menu');
@@ -455,7 +484,7 @@ const Screens = {
               const result = g.finalScore.us > g.finalScore.opponent ? 'W' : (g.finalScore.us < g.finalScore.opponent ? 'L' : 'D');
               return `
                 <li class="player-row season-game-row">
-                  <a href="#/season/${team.id}/game/${g.id}" class="season-game-link" aria-label="Edit game vs ${escapeHtml(g.opponentName || 'Opponent')}">
+                  <a href="#/season/${team.id}/game/${g.id}" class="season-game-link" aria-label="Game vs ${escapeHtml(g.opponentName || 'Opponent')}">
                     <span class="result-badge result-${result}">${result}</span>
                     <span class="season-game-info">
                       <span class="season-game-opponent">${g.opponentColor ? `<span class="team-dot" style="${colorStyle(g.opponentColor)}"></span>` : ''}${escapeHtml(g.opponentName || 'Opponent')}</span>
@@ -482,6 +511,86 @@ const Screens = {
     `;
   },
 
+  // A finished game from the season: score, goals, everyone's times (field / bench / goalie and
+  // time in each position) and the coach's notes, with Edit leading to the editor. Games saved
+  // before player times and notes were recorded just say so in place of those sections.
+  gameSummary(teamId, gameId) {
+    const teams = DB.loadTeams();
+    const team = teams.find((t) => t.id === teamId);
+    if (!team) { location.hash = '#/teams'; return; }
+    const g = DB.loadGames(teamId).find((x) => x.id === gameId);
+    if (!g) { location.hash = `#/season/${teamId}`; return; }
+    const rosterById = Object.fromEntries(team.players.map((p) => [p.id, p]));
+    const nameOf = (id) => (rosterById[id] ? rosterById[id].name : '(removed player)');
+
+    const score = g.finalScore || scoreFromGoals(g.goals);
+    const result = score.us > score.opponent ? 'W' : (score.us < score.opponent ? 'L' : 'D');
+    const opp = g.opponentName || 'Opponent';
+    const goals = (g.goals || []).slice();
+
+    const goalsHtml = goals.length === 0 ? '<p class="summary-empty">No goals.</p>' : `
+      <ul class="player-list">
+        ${goals.map((goal) => {
+          const label = goal.team === 'opponent'
+            ? `<span class="goal-unknown">${escapeHtml(opp)}</span>`
+            : (goal.scorerId ? escapeHtml(nameOf(goal.scorerId)) : '<span class="goal-unknown">Unknown scorer</span>')
+              + ((goal.assistIds || []).length ? ` <span class="goal-assist">(assist: ${escapeHtml(goal.assistIds.map(nameOf).join(', '))})</span>` : '');
+          return `
+            <li class="player-row goal-log-row">
+              <span class="goal-log-half">${goal.half ? `H${goal.half}` : '&ndash;'}</span>
+              <span class="goal-log-label">${label}</span>
+            </li>`;
+        }).join('')}
+      </ul>`;
+
+    // Most field time first. Anyone no longer on the roster still shows, as "(removed player)".
+    const stats = Array.isArray(g.playerStats) ? g.playerStats.slice().sort((a, b) => (b.field || 0) - (a.field || 0)) : null;
+    const statsHtml = !stats || stats.length === 0
+      ? '<p class="summary-empty">Player times weren&rsquo;t recorded for this game. They&rsquo;re saved for games played from now on.</p>'
+      : stats.map((st) => {
+          const rp = rosterById[st.id];
+          return `
+            <div class="player-stat-row ${st.out ? 'player-out' : ''}">
+              <div class="player-stat-name">
+                <span class="jersey-badge ${rp && rp.number ? '' : 'no-number'}">${escapeHtml((rp && rp.number) || '?')}</span>${escapeHtml(nameOf(st.id))}
+                ${st.out ? '<span class="out-tag">Out</span>' : ''}
+              </div>
+              ${timeBarHtml(st.field || 0, st.bench || 0)}
+              <div class="player-stat-detail">${timeChipsHtml(st.field || 0, st.bench || 0, st.goalie || 0, st.rows)}</div>
+            </div>`;
+        }).join('');
+
+    const notes = (g.notes || '').trim();
+
+    App.root.innerHTML = `
+      <header class="topbar">
+        <a href="#/season/${team.id}" class="back-link" aria-label="Back to season">${icon('back', 22)}</a>
+        <h1>vs ${escapeHtml(opp)}</h1>
+        <a href="#/season/${team.id}/game/${g.id}/edit" class="icon-btn">Edit</a>
+      </header>
+      <main class="list-page">
+        <div class="edit-score summary-score">
+          <span class="score-team-name team-pill" style="${colorStyle(teamColor(team))}">${escapeHtml(team.name)}</span>
+          <span class="edit-score-value">${score.us} &ndash; ${score.opponent}</span>
+          <span class="score-team-name team-pill" style="${colorStyle(g.opponentColor || '#5b6452')}">${escapeHtml(opp)}</span>
+        </div>
+        <p class="summary-meta">
+          <span class="result-badge result-${result}">${result}</span>
+          ${g.date ? new Date(g.date).toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' }) : 'No date'}
+        </p>
+        <h2 class="section-label">Goals</h2>
+        ${goalsHtml}
+        <h2 class="section-label">Player times</h2>
+        ${stats && stats.length ? '<p class="panel-hint">ST = striker · AM = attacking mid · DM = defensive mid · DEF = defence</p>' : ''}
+        <div class="summary-stats">${statsHtml}</div>
+        <h2 class="section-label">Notes</h2>
+        ${notes
+          ? `<div class="summary-notes">${escapeHtml(notes)}</div>`
+          : `<p class="summary-empty">No notes. <a href="#/season/${team.id}/game/${g.id}/edit">Add some</a></p>`}
+      </main>
+    `;
+  },
+
   // Edit a finished game from the season: date, opponent, and the goal list. The score isn't
   // typed in directly - it's derived from the goals (scoreFromGoals), so adding, removing or
   // re-crediting a goal keeps the score and the season leaderboard in step. All edits go into a
@@ -502,7 +611,9 @@ const Screens = {
     const counted = scoreFromGoals(draft.goals);
     for (let i = counted.us; i < saved.us; i++) draft.goals.push({ id: uid(), team: 'us', half: null, at: null, scorerId: null, assistIds: [] });
     for (let i = counted.opponent; i < saved.opponent; i++) draft.goals.push({ id: uid(), team: 'opponent', half: null, at: null });
+    draft.notes = draft.notes || '';
     const startingJson = JSON.stringify(draft);
+    const summaryHash = `#/season/${team.id}/game/${draft.id}`;
 
     const toDateInput = (ts) => {
       if (!ts) return '';
@@ -513,7 +624,7 @@ const Screens = {
 
     App.root.innerHTML = `
       <header class="topbar">
-        <a href="#/season/${team.id}" class="back-link" id="eg-back" aria-label="Back to season">${icon('back', 22)}</a>
+        <a href="${summaryHash}" class="back-link" id="eg-back" aria-label="Back to game">${icon('back', 22)}</a>
         <h1>Edit Game</h1>
       </header>
       <main class="list-page">
@@ -541,6 +652,8 @@ const Screens = {
             <button id="eg-opp-plus" class="stepper-btn" type="button" aria-label="Add opponent goal">+</button>
           </div>
         </section>
+        <h2 class="section-label"><label for="eg-notes">Notes</label></h2>
+        <textarea id="eg-notes" class="notes-input" rows="5" placeholder="Anything worth remembering about this game">${escapeHtml(draft.notes)}</textarea>
         <div class="confirm-actions edit-game-actions">
           <button class="secondary-btn" id="eg-cancel" type="button">Cancel</button>
           <button class="primary-btn" id="eg-save" type="button">Save</button>
@@ -704,6 +817,7 @@ const Screens = {
     // (or noon, for a record that never had one) so re-saving doesn't shift it across midnight.
     function syncFields() {
       draft.opponentName = App.root.querySelector('#eg-opponent').value.trim();
+      draft.notes = App.root.querySelector('#eg-notes').value.trim();
       const dateVal = App.root.querySelector('#eg-date').value;
       if (dateVal) {
         const [y, m, d] = dateVal.split('-').map(Number);
@@ -719,7 +833,7 @@ const Screens = {
         const discard = await showConfirm('Discard your changes to this game?', 'Discard');
         if (!discard) return;
       }
-      location.hash = `#/season/${team.id}`;
+      location.hash = summaryHash;
     }
 
     App.root.querySelector('#eg-back').addEventListener('click', (e) => { e.preventDefault(); leave(); });
@@ -729,14 +843,14 @@ const Screens = {
       draft.finalScore = scoreFromGoals(draft.goals);
       DB.updateGame(team.id, draft);
       showToast('Game saved');
-      location.hash = `#/season/${team.id}`;
+      location.hash = summaryHash;
     });
 
     render();
   },
 
   // A team's home screen, where picking a team lands: who's here today, the opponent, and Begin
-  // Game. Things that rarely change live behind the ... menu instead - the full roster editor,
+  // Game. Things that rarely change live behind the Menu instead - the full roster editor,
   // and team settings (players on field, half length), which are also summarised in one tappable
   // line so the coach can see what the game will use without them taking up the screen.
   teamHome(teamId) {
@@ -770,17 +884,17 @@ const Screens = {
           <a href="#/teams" class="back-link" aria-label="Back to teams">${icon('back', 22)}</a>
           <h1>${escapeHtml(team.name)}</h1>
           <a href="#/season/${team.id}" class="icon-btn">${icon('calendar')} Season</a>
-          <button id="team-menu-btn" class="icon-btn icon-only" type="button" aria-label="Team menu" aria-haspopup="true">${MORE_ICON}</button>
+          <button id="team-menu-btn" class="icon-btn menu-btn" type="button" aria-label="Menu" aria-haspopup="true">${icon('menu', 20)}<span class="btn-label">Menu</span></button>
           <div id="team-menu" class="menu-layer" hidden>
             <div class="menu-backdrop"></div>
             <div id="team-menu-card" class="settings-dropdown">
               <a href="#/team/${team.id}/roster" class="settings-item">${icon('players', 20)} Edit roster</a>
               <button id="team-settings-btn" class="settings-item" type="button">${icon('field', 20)} Team settings</button>
               <div class="menu-divider"></div>
-              <button id="team-help-btn" class="settings-item" type="button">${icon('help', 20)} Help &amp; feedback</button>
+              <button id="team-help-btn" class="settings-item" type="button">${icon('help', 20)} Help &amp; Feedback</button>
               <div class="menu-divider"></div>
               <button id="team-delete-btn" class="settings-item settings-item-danger" type="button">${icon('trash', 20)} Delete team</button>
-              <div class="settings-version">${escapeHtml(APP_VERSION)}</div>
+              <div class="settings-version">${escapeHtml(VERSION_LABEL)}</div>
             </div>
           </div>
         </header>
@@ -822,7 +936,7 @@ const Screens = {
         <div id="team-settings-modal" class="modal" hidden></div>
       `;
 
-      // --- ... menu ---
+      // --- Menu ---
       const menu = App.root.querySelector('#team-menu');
       const menuCard = App.root.querySelector('#team-menu-card');
       App.root.querySelector('#team-menu-btn').addEventListener('click', () => { menu.hidden = !menu.hidden; });
@@ -1068,21 +1182,23 @@ const Screens = {
           ${session.live ? `<span id="half-clock" class="half-clock ${inExtraTime(Date.now()) ? 'half-clock-extra' : ''}">${halfClockLabel(Date.now())}</span>` : ''}
         </div>
         <button id="info-panel-btn" class="icon-btn" type="button">${icon('players')}<span class="btn-label">Players</span></button>
-        <button id="settings-btn" class="icon-btn icon-only" type="button" aria-label="Menu" aria-haspopup="true">${MORE_ICON}</button>
+        <button id="settings-btn" class="icon-btn menu-btn" type="button" aria-label="Menu" aria-haspopup="true">${icon('menu', 20)}<span class="btn-label">Menu</span></button>
         <div id="settings-menu" class="menu-layer" hidden>
           <div class="menu-backdrop"></div>
           <div id="settings-dropdown" class="settings-dropdown">
             <div class="menu-label">Game</div>
             ${session.live ? `<button id="adjust-clock-btn" class="settings-item" type="button">${icon('clock', 20)} Adjust clock</button>` : ''}
             ${session.live ? `<button id="end-half-menu-btn" class="settings-item" type="button">${icon('whistle', 20)} End half ${session.half || 1} now</button>` : ''}
+            <button id="notes-btn" class="settings-item" type="button">${icon('note', 20)} Notes${(session.notes || '').trim() ? ' <span class="menu-value menu-dot" aria-label="has notes">&bull;</span>' : ''}</button>
             <button id="fc-edit-btn" class="settings-item" type="button">${icon('field', 20)} Players on field <span class="menu-value">${session.fieldCount} ${icon('chevron', 14)}</span></button>
             <div class="menu-label">Roster</div>
             <button id="add-late-btn" class="settings-item" type="button">${icon('addPerson', 20)} Add late player</button>
+            <a href="#/season/${team.id}" class="settings-item">${icon('calendar', 20)} Season history</a>
             <div class="menu-divider"></div>
-            <button id="help-btn" class="settings-item" type="button">${icon('help', 20)} Help &amp; feedback</button>
+            <button id="help-btn" class="settings-item" type="button">${icon('help', 20)} Help &amp; Feedback</button>
             <div class="menu-divider"></div>
             <button id="end-game-btn" class="settings-item settings-item-danger" type="button">${icon('flag', 20)} End game</button>
-            <div class="settings-version">${escapeHtml(APP_VERSION)}</div>
+            <div class="settings-version">${escapeHtml(VERSION_LABEL)}</div>
           </div>
         </div>
       </header>
@@ -1146,7 +1262,18 @@ const Screens = {
         if (!inExtraTime(Date.now())) { kickoffContainer.innerHTML = ''; return; }
         const isLast = (session.half || 1) >= TOTAL_HALVES;
         kickoffContainer.innerHTML = `<button id="end-half-btn" class="kickoff-bar end-half-bar" type="button">&#9632; ${isLast ? 'End Game' : `End Half ${session.half || 1}`}</button>`;
-        kickoffContainer.querySelector('#end-half-btn').addEventListener('click', () => { endHalfNow(); });
+        // The big red bar is easy to hit by accident mid-game, so it always asks first, showing how
+        // far past full time the clock is. (Over 10 minutes past, endHalfNow's extra-time question
+        // stands in for the confirmation.)
+        kickoffContainer.querySelector('#end-half-btn').addEventListener('click', () => {
+          const end = scheduledHalfEnd();
+          const over = end != null ? ` The clock is ${formatDuration(Math.max(0, Math.floor((Date.now() - end) / 1000)))} past full time.` : '';
+          endHalfNow({
+            confirmMessage: isLast
+              ? `End the game?${over} It will be saved to the season history.`
+              : `End half ${session.half || 1}?${over}`,
+          });
+        });
         return;
       }
       const total = totalOnField();
@@ -1726,6 +1853,50 @@ const Screens = {
 
     App.root.querySelector('#help-btn').addEventListener('click', () => showHelpMenu());
 
+    // Game notes: free text, saved as it's typed, kept with the game in the season. "+ Time"
+    // stamps the half and how far into it we are (e.g. "H1 12:30 - "), so a note can say when.
+    App.root.querySelector('#notes-btn').addEventListener('click', () => {
+      const modal = document.createElement('div');
+      modal.className = 'modal';
+      modal.innerHTML = `
+        <div class="modal-card notes-card">
+          <div class="panel-header">
+            <h2>Game notes</h2>
+            <button class="panel-close-btn" data-close type="button" aria-label="Close">${icon('close', 20)}</button>
+          </div>
+          <textarea class="notes-input" rows="9" placeholder="Injuries, who played well, things to work on..."></textarea>
+          <div class="confirm-actions">
+            <button class="secondary-btn" data-stamp type="button">+ Time</button>
+            <button class="primary-btn" data-close type="button">Done</button>
+          </div>
+          <p class="panel-hint notes-hint">Saved automatically, and kept with this game in the season.</p>
+        </div>
+      `;
+      document.body.appendChild(modal);
+      const ta = modal.querySelector('.notes-input');
+      ta.value = session.notes || '';
+      const save = () => { session.notes = ta.value; DB.saveSession(session); };
+      ta.addEventListener('input', save);
+      modal.querySelector('[data-stamp]').addEventListener('click', () => {
+        const now = Date.now();
+        const stamp = session.live && session.halfStartedAt
+          ? `H${session.half || 1} ${formatDuration(Math.floor((now - session.halfStartedAt) / 1000))} - `
+          : (session.kickoffAt ? 'Half-time - ' : 'Pre-game - ');
+        const start = ta.selectionStart != null ? ta.selectionStart : ta.value.length;
+        const before = ta.value.slice(0, start);
+        const lead = before && !before.endsWith('\n') ? '\n' : '';
+        ta.value = before + lead + stamp + ta.value.slice(ta.selectionEnd != null ? ta.selectionEnd : start);
+        const caret = (before + lead + stamp).length;
+        ta.focus();
+        ta.setSelectionRange(caret, caret);
+        save();
+      });
+      const close = () => { save(); modal.remove(); reloadGameScreen(); };
+      modal.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', close));
+      modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+      ta.focus();
+    });
+
     const endHalfMenuBtn = App.root.querySelector('#end-half-menu-btn');
     if (endHalfMenuBtn) {
       endHalfMenuBtn.addEventListener('click', () => {
@@ -1776,6 +1947,8 @@ const Screens = {
         DB.saveSession(session);
         const halfClockEl = App.root.querySelector('#half-clock');
         if (halfClockEl) halfClockEl.textContent = halfClockLabel(Date.now());
+        const readout = clockModal.querySelector('#clock-readout');
+        if (readout) readout.textContent = halfClockLabel(Date.now());
         rerender();
         if (Math.abs(applied - deltaMinutes) > 0.01) {
           showToast(`Could only adjust by ${formatDuration(Math.abs(applied) * 60)} - that's all the time that had elapsed on the clock.`);
@@ -1800,11 +1973,14 @@ const Screens = {
         clockModal.innerHTML = `
           <div class="modal-card">
             <h2>Adjust Clock</h2>
+            <p class="clock-help">Use this if you started the clock at the wrong moment. Every player&rsquo;s time moves with it, so playing times stay right.</p>
+            <p class="clock-now">Clock now: <b id="clock-readout">${halfClockLabel(Date.now())}</b></p>
             <div class="goal-team-picker">
-              <button class="secondary-btn big" id="clock-restart" type="button">Restart Half</button>
-              <button class="secondary-btn big" id="clock-minus30" type="button">&minus;30 seconds</button>
-              <button class="secondary-btn big" id="clock-plus30" type="button">+30 seconds</button>
-              <button class="secondary-btn" id="clock-cancel" type="button">Cancel</button>
+              <button class="secondary-btn big clock-option" id="clock-restart" type="button">Restart Half<small>Started the clock too early? Resets this half to 0:00 played.</small></button>
+              <button class="secondary-btn big clock-option" id="clock-minus30" type="button">&minus;30 seconds<small>Started a little early: 30 seconds less played, 30 more left on the clock.</small></button>
+              <button class="secondary-btn big clock-option" id="clock-plus30" type="button">+30 seconds<small>Started a little late: 30 seconds more played, 30 less left on the clock.</small></button>
+              <p class="clock-tip">Tap &minus;30 or +30 as many times as you need.</p>
+              <button class="secondary-btn" id="clock-cancel" type="button">Done</button>
             </div>
           </div>
         `;
@@ -1899,26 +2075,9 @@ const Screens = {
         const fieldTotal = getElapsedField(p, now, session.live);
         const benchTotal = getElapsedBench(p, now, session.live);
         const goalieTotal = getElapsedGoalie(p, now, session.live);
-        const grandTotal = fieldTotal + benchTotal;
-        const fieldPct = grandTotal > 0 ? (fieldTotal / grandTotal) * 100 : null;
-
-        const chips = [
-          `<span class="stat-chip">Field ${formatDuration(fieldTotal)}</span>`,
-          `<span class="stat-chip">Bench ${formatDuration(benchTotal)}</span>`,
-        ];
-        if (goalieTotal > 0) chips.push(`<span class="stat-chip">GK ${formatDuration(goalieTotal)}</span>`);
-        for (let i = 0; i < FieldLayout.ROW_COUNT; i++) {
-          const rowTotal = getElapsedRow(p, i, now, session.live);
-          if (rowTotal > 0) chips.push(`<span class="stat-chip">${ROW_LABELS[i]} ${formatDuration(rowTotal)}</span>`);
-        }
-
-        const barHtml = fieldPct == null
-          ? '<div class="time-bar time-bar-empty"></div>'
-          : `<div class="time-bar">
-               <div class="time-bar-field" style="width:${fieldPct}%"></div>
-               <div class="time-bar-bench" style="width:${100 - fieldPct}%"></div>
-               <div class="time-bar-thumb" style="left:${fieldPct}%"></div>
-             </div>`;
+        const rowTotals = [];
+        for (let i = 0; i < FieldLayout.ROW_COUNT; i++) rowTotals.push(getElapsedRow(p, i, now, session.live));
+        const barHtml = timeBarHtml(fieldTotal, benchTotal);
 
         return `
           <div class="player-stat-row ${p.unavailable ? 'player-out' : ''} ${expandedPlayerId === rp.id ? 'expanded' : ''}">
@@ -1928,7 +2087,7 @@ const Screens = {
               <span class="player-stat-chevron">${icon('chevron', 16)}</span>
             </button>
             ${barHtml}
-            <div class="player-stat-detail">${chips.join('')}</div>
+            <div class="player-stat-detail">${timeChipsHtml(fieldTotal, benchTotal, goalieTotal, rowTotals)}</div>
             ${expandedPlayerId === rp.id ? `
             <div class="player-stat-actions">
               <button class="secondary-btn small" data-toggle-unavailable="${rp.id}" type="button">${p.unavailable ? 'Mark Available' : 'Mark Out'}</button>
@@ -2204,7 +2363,7 @@ const Screens = {
       if (location.hash !== '#/game' || !DB.loadSession()) return;
       if (preKickoff) { cancelSetup(); return; }
       history.pushState({ gameGuard: true }, '', '#/game');
-      showToast('Game in progress - use the ⋯ menu > End game to leave');
+      showToast('Game in progress - use Menu > End game to leave');
     }
     window.addEventListener('popstate', onPopState);
 

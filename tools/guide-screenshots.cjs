@@ -110,7 +110,8 @@ const HELPERS = () => {
 
   // --- Data: two teams, a few past games for the season screen ---
   await page.goto(BASE + '#/teams');
-  await page.evaluate(() => localStorage.clear());
+  // Start clean, marked as having seen this release so "What's new" never covers a screenshot.
+  await page.evaluate(() => { localStorage.clear(); localStorage.setItem(LAST_SEEN_RELEASE_KEY, RELEASE_VERSION); });
   await page.goto(BASE + '#/seed-demo');
   await settle();
   const teamId = await page.evaluate(() => {
@@ -276,7 +277,7 @@ const HELPERS = () => {
   await page.tap('#info-panel-close');
   await settle();
 
-  // --- 8. The ... menu ---
+  // --- 8. The Menu ---
   await page.tap('#settings-btn');
   await settle();
   {

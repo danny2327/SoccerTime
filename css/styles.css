@@ -318,7 +318,7 @@ button.back-link { background: none; border: none; padding: 0; flex-shrink: 0; }
 
 /* ---------- Game screen ---------- */
 
-/* Any header carrying a ... menu (game screen, team home) - the menu layer hangs off its bottom. */
+/* Any header carrying a Menu (game screen, team home) - the menu layer hangs off its bottom. */
 .topbar.has-menu {
   flex-wrap: nowrap;
   position: relative;
@@ -342,9 +342,15 @@ button.back-link { background: none; border: none; padding: 0; flex-shrink: 0; }
 }
 
 /* Narrow phones: Players drops its label and keeps just the icon, so the clock keeps its room. */
-@media (max-width: 370px) {
-  .game-header .btn-label { display: none; }
+/* Narrower phones: Players goes icon-only first (keeping the Menu label), and on the narrowest
+   Menu does too - so the clock always has room on one line. */
+@media (max-width: 410px) {
+  #info-panel-btn .btn-label { display: none; }
   #info-panel-btn { padding: 0; width: 40px; }
+}
+@media (max-width: 370px) {
+  .menu-btn .btn-label { display: none; }
+  .menu-btn { padding: 0; width: 40px; }
 }
 
 /* The menu layer hangs off the bottom of the header: a dimmed backdrop over the rest of the
@@ -536,6 +542,7 @@ button.back-link { background: none; border: none; padding: 0; flex-shrink: 0; }
 .sub-queue-execute:active { background: #24578c; }
 
 .half-clock {
+  white-space: nowrap;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1703,3 +1710,95 @@ button.back-link { background: none; border: none; padding: 0; flex-shrink: 0; }
 
 .kickoff-bar.end-half-bar { background: #b0281c; color: #fff; }
 .kickoff-bar.end-half-bar:active { background: #8f1f16; }
+
+/* --- Game notes (in-game sheet, Edit Game) and the season game summary --- */
+
+.notes-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  font: inherit;
+  font-size: 16px; /* 16px+ keeps iOS from zooming in on focus */
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.notes-hint { margin: 10px 0 0; text-align: center; }
+
+.menu-dot { font-size: 22px; line-height: 0; }
+
+.summary-score { margin-top: 4px; }
+
+.summary-meta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 8px 0 4px;
+  font-size: 14px;
+  color: #5b6452;
+}
+
+.summary-empty { margin: 4px 0 8px; font-size: 14px; color: #6b7462; line-height: 1.45; }
+.summary-empty a { color: var(--green); font-weight: 700; }
+
+.summary-stats .player-stat-row:first-child { padding-top: 0; }
+
+.summary-notes {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+/* --- What's new (changelog) sheet --- */
+
+.changelog-entry { padding: 14px 0 6px; border-top: 1px solid var(--line); }
+.changelog-entry:first-of-type { border-top: none; padding-top: 4px; }
+.changelog-entry h3 { margin: 0; font-size: 18px; }
+.changelog-build { font-size: 13px; font-weight: 600; color: #6b7462; }
+.changelog-date { margin: 2px 0 8px; font-size: 13px; color: #6b7462; }
+.changelog-entry ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
+.changelog-entry li { font-size: 14px; line-height: 1.45; }
+.changelog-all { width: 100%; min-height: 44px; margin: 12px 0 0; }
+.changelog-done { margin: 12px 0 4px; }
+
+/* --- Adjust Clock: helper text, live readout, and an explanation under each option --- */
+
+.clock-help { margin: 0 0 10px; font-size: 14px; line-height: 1.45; color: #3a4234; }
+.clock-now { margin: 0 0 12px; font-size: 14px; color: #5b6452; }
+.clock-now b { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+/* Raised, outlined buttons with a pressed-down state, so they read clearly as tappable rather
+   than as grey info boxes. Restart Half is red - it throws away played time. */
+.clock-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  background: #fff;
+  color: var(--green);
+  border: 2px solid var(--green);
+  border-radius: 12px;
+  box-shadow: 0 3px 0 var(--green-dark);
+  padding: 11px 14px 10px;
+  font-size: 17px;
+  font-weight: 800;
+  transition: transform 0.05s, box-shadow 0.05s;
+}
+.clock-option:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--green-dark); background: #f1f6ee; }
+.clock-option small { font-size: 12.5px; font-weight: 500; color: #5b6452; line-height: 1.35; }
+
+#clock-restart { color: #b0281c; border-color: #b0281c; box-shadow: 0 3px 0 #7d1c14; }
+#clock-restart:active { box-shadow: 0 1px 0 #7d1c14; background: #fbf1f0; }
+
+.clock-tip { margin: 0; text-align: center; font-size: 12.5px; color: #6b7462; }

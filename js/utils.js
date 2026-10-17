@@ -181,6 +181,9 @@ const ICON_PATHS = {
   chevron: '<path d="M9 6l6 6-6 6"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
+  menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+  spark: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4"/><path d="M12 8.5l1.2 2.3 2.3 1.2-2.3 1.2L12 15.5l-1.2-2.3L8.5 12l2.3-1.2z"/>',
+  note: '<path d="M5 3h10l4 4v14H5z"/><path d="M15 3v4h4"/><path d="M8 12h8M8 16h6"/>',
   whistle: '<circle cx="9" cy="14" r="6"/><path d="M13.5 10L21 6v4l-5 2.5"/><path d="M9 3v3"/>',
   trash: '<path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/>',
 };
@@ -189,8 +192,6 @@ function icon(name, size) {
   const s = size || 18;
   return `<svg class="icon" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name]}</svg>`;
 }
-
-const MORE_ICON = '<svg class="icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>';
 
 const FEEDBACK_EMAIL = 'dstrood@gmail.com';
 
@@ -261,14 +262,14 @@ const GUIDE_SECTIONS = [
     note: 'The goal list at the bottom lets you edit or delete a goal.',
   },
   {
-    id: 'menu', title: 'The &#8943; menu', img: 'menu',
-    intro: '<b>Adjust clock</b> if kickoff started early or late. <b>End half now</b> if the ref ends it early. Change <b>players on field</b> mid-game. <b>Add late player</b> for someone who just arrived. <b>End game</b> saves it to the season.',
+    id: 'menu', title: 'The Menu', img: 'menu',
+    intro: '<b>Notes</b> for anything worth remembering (<b>+ Time</b> stamps when). <b>Adjust clock</b> if kickoff started early or late. <b>End half now</b> if the ref ends it early. Change <b>players on field</b> mid-game. <b>Add late player</b> for someone who just arrived. <b>Season history</b> opens the season without stopping the game. <b>End game</b> saves it to the season.',
   },
   {
     id: 'season', title: 'Season', img: 'season',
     steps: [
       'Your win-draw-loss record.',
-      'Tap a game to edit its date, opponent, colour or goals.',
+      'Tap a game to see its goals, everyone’s playing time and positions, and your notes. <b>Edit</b> changes them.',
       'Goals and assists for the season.',
     ],
   },
@@ -308,7 +309,7 @@ function showGuide() {
       ${GUIDE_SECTIONS.map(sectionHtml).join('')}
       <section class="guide-section">
         <h3>Questions or ideas?</h3>
-        <p class="guide-intro">Open <b>Help &amp; feedback</b> and tap <b>Send feedback</b>.</p>
+        <p class="guide-intro">Open <b>Help &amp; Feedback</b> and tap <b>Send feedback</b>.</p>
       </section>
     </div>
   `;
@@ -331,12 +332,12 @@ function showGuide() {
 // the version and device go in the body so every report says what it was running on.
 function feedbackMailtoUrl() {
   const standalone = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
-  const subject = `SoccerTime feedback (${APP_VERSION})`;
-  const body = `\n\n\n---\nSoccerTime ${APP_VERSION}${standalone ? ' (installed)' : ''}\n${navigator.userAgent}`;
+  const subject = `SoccerTime feedback (${VERSION_LABEL})`;
+  const body = `\n\n\n---\nSoccerTime ${VERSION_LABEL}${standalone ? ' (installed)' : ''}\n${navigator.userAgent}`;
   return `mailto:${FEEDBACK_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
-// The Help & feedback sheet - reached from the "?" button on the pre-game screens and from the
+// The Help & Feedback sheet - reached from the "?" button on the pre-game screens and from the
 // game screen's menu. Two choices: the walkthrough, or an email to the developer.
 function showHelpMenu() {
   const modal = document.createElement('div');
@@ -344,7 +345,7 @@ function showHelpMenu() {
   modal.innerHTML = `
     <div class="modal-card help-menu-card">
       <div class="panel-header">
-        <h2>Help &amp; feedback</h2>
+        <h2>Help &amp; Feedback</h2>
         <button class="panel-close-btn" data-close type="button" aria-label="Close">${icon('close', 20)}</button>
       </div>
       <button class="help-option" data-guide type="button">
@@ -367,7 +368,15 @@ function showHelpMenu() {
         <span>No email app opened? Send it to <strong>${escapeHtml(FEEDBACK_EMAIL)}</strong></span>
         <button class="secondary-btn small" data-copy-email type="button">Copy</button>
       </div>
-      <div class="help-menu-version">SoccerTime ${escapeHtml(APP_VERSION)}</div>
+      <button class="help-option" data-whatsnew type="button">
+        <span class="help-option-icon">${icon('spark', 22)}</span>
+        <span class="help-option-text">
+          <span class="help-option-title">What&rsquo;s new</span>
+          <span class="help-option-sub">Every update, newest first</span>
+        </span>
+        ${icon('chevron', 16)}
+      </button>
+      <div class="help-menu-version">SoccerTime ${escapeHtml(VERSION_LABEL)}</div>
     </div>
   `;
   document.body.appendChild(modal);
@@ -375,6 +384,7 @@ function showHelpMenu() {
   modal.querySelector('[data-close]').addEventListener('click', close);
   modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
   modal.querySelector('[data-guide]').addEventListener('click', () => { close(); showGuide(); });
+  modal.querySelector('[data-whatsnew]').addEventListener('click', () => { close(); showChangelog(); });
   // A real link (not a scripted navigation) is what phones - installed iOS apps especially -
   // reliably hand off to the email app. The sheet stays open afterwards: a device with no email
   // app set up just does nothing, so the address is revealed with a Copy button as a fallback.
@@ -409,10 +419,10 @@ function fallbackCopy(text) {
 }
 
 // The header "?" button on the pre-game screens (team list, roster, start game), where there's
-// no game menu to hold Help & feedback. helpButtonHtml goes in the header markup; wireHelpButton
+// no game menu to hold Help & Feedback. helpButtonHtml goes in the header markup; wireHelpButton
 // hooks it up once it's rendered.
 function helpButtonHtml() {
-  return `<button id="help-btn" class="icon-btn icon-only" type="button" aria-label="Help and feedback">${icon('help', 20)}</button>`;
+  return `<button id="help-btn" class="icon-btn icon-only" type="button" aria-label="Help and Feedback">${icon('help', 20)}</button>`;
 }
 
 function wireHelpButton() {
